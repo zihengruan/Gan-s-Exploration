@@ -139,10 +139,19 @@ def main(args):
         adversarial_loss = torch.nn.BCELoss().to(device)
         classified_loss = torch.nn.CrossEntropyLoss().to(device)
 
+        triplet_loss = CategoricalLoss(atoms=args.num_outcomes, v_max=args.positive_skew, v_min=args.negative_skew)
+        triplet_loss.to(device)
+        num_outcomes = args.num_outcomes
+
         # Optimizers
-        optimizer_G = torch.optim.Adam(G.parameters(), lr=args.G_lr)  # optimizer for generator
-        optimizer_D = torch.optim.Adam(D.parameters(), lr=args.D_lr)  # optimizer for discriminator
+        # optimizer_G = torch.optim.Adam(G.parameters(), lr=args.G_lr)  # optimizer for generator
+        # optimizer_D = torch.optim.Adam(D.parameters(), lr=args.D_lr)  # optimizer for discriminator
         optimizer_E = AdamW(E.parameters(), args.bert_lr)
+
+        optimizer_G = torch.optim.Adam(G.parameters(), lr=args.G_lr, betas=(args.beta1, args.beta2),weight_decay=args.weight_decay, eps=args.adam_eps)
+        optimizer_D = torch.optim.Adam(D.parameters(), lr=args.D_lr, betas=(args.beta1, args.beta2),weight_decay=args.weight_decay)
+        decayG = torch.optim.lr_scheduler.ExponentialLR(optimizer_G, gamma=1 - args.decay)
+        decayD = torch.optim.lr_scheduler.ExponentialLR(optimizer_D, gamma=1 - args.decay)
 
         G_total_train_loss = []
         D_total_fake_loss = []
@@ -172,6 +181,16 @@ def main(args):
             D_class_loss = 0
 
             G_features = []
+
+            # define anchors
+            # e.g. normal and uniform
+            gauss = np.random.normal(0, 0.1, 1000)
+            count, bins = np.histogram(gauss, args.num_outcomes)
+            anchor0 = count / sum(count)
+
+            unif = np.random.uniform(-1, 1, 1000)
+            count, bins = np.histogram(unif, args.num_outcomes)
+            anchor1 = count / sum(count)
 
             for sample in tqdm.tqdm(train_dataloader):
                 sample = (i.to(device) for i in sample)
@@ -281,9 +300,13 @@ def main(args):
 
                 real_loss_func = torch.nn.BCELoss(weight=weight).to(device)
 
+# ---------------------------------------------------------------------------
                 # the label used to train generator and discriminator.
-                valid_label = FloatTensor(batch, 1).fill_(1.0).detach()
-                fake_label = FloatTensor(batch, 1).fill_(0.0).detach()
+                # valid_label = FloatTensor(batch, 1).fill_(1.0).detach()
+                # fake_label = FloatTensor(batch, 1).fill_(0.0).detach()
+
+                anchor_real = torch.zeros((batch, num_outcomes), dtype=torch.float).to(device) + torch.tensor(anchor1, dtype=torch.float).to(device)
+                anchor_fake = torch.zeros((batch, num_outcomes), dtype=torch.float).to(device) + torch.tensor(anchor0, dtype=torch.float).to(device)
 
                 optimizer_E.zero_grad()
                 sequence_output, pooled_output = E(token, mask, type_ids)
@@ -291,18 +314,19 @@ def main(args):
 
                 # train D on real
                 optimizer_D.zero_grad()
-                real_f_vector, discriminator_output, classification_output = D(real_feature, return_feature=True)
+                discriminator_output= D(real_feature)
                 discriminator_output = discriminator_output.squeeze()
                 # real_loss = adversarial_loss(discriminator_output, (y != 0.0).float())
-                real_loss = real_loss_func(discriminator_output, (y != 0.0).float())
-                if n_class > 2:  # 大于2表示除了训练判别器还要训练分类器
-                    class_loss = classified_loss(classification_output, y.long())
-                    real_loss += class_loss
-                    D_class_loss += class_loss.detach()
+                # real_loss = real_loss_func(discriminator_output, (y != 0.0).float())
+                real_loss = triplet_loss(anchor_real, discriminator_output, skewness=args.positive_skew)
+                # if n_class > 2:  # 大于2表示除了训练判别器还要训练分类器
+                #     class_loss = classified_loss(classification_output, y.long())
+                #     real_loss += class_loss
+                #     D_class_loss += class_loss.detach()
                 real_loss.backward()
 
-                if args.do_vis:
-                    all_features.append(real_f_vector.detach())
+                # if args.do_vis:
+                #     all_features.append(real_f_vector.detach())
 
                 # # train D on fake
                 if args.model == 'lstm_gan' or args.model == 'cnn_gan':
@@ -312,14 +336,17 @@ def main(args):
                     # z = FloatTensor(np.random.uniform(-1, 1, (batch, args.G_z_dim))).to(device)
                     z = FloatTensor(np.random.normal(0, 1, (batch, args.G_z_dim))).to(device)
                 fake_feature = G(z).detach()
-                fake_discriminator_output = D.detect_only(fake_feature)
+                fake_discriminator_output= D(fake_feature)
                 # beta of fake
-                if 0 <= args.beta <= 1:
-                    fake_loss = args.beta * adversarial_loss(fake_discriminator_output, fake_label)
-                else:
-                    fake_loss = adversarial_loss(fake_discriminator_output, fake_label)
+                # if 0 <= args.beta <= 1:
+                #     fake_loss = args.beta * adversarial_loss(fake_discriminator_output, fake_label)
+                # else:
+                #     fake_loss = adversarial_loss(fake_discriminator_output, fake_label)
+                fake_loss = triplet_loss(anchor_fake, fake_discriminator_output, skewness=args.negative_skew)
                 fake_loss.backward()
                 optimizer_D.step()
+
+                decayD.step()
 
                 if args.fine_tune:
                     optimizer_E.step()
@@ -332,40 +359,47 @@ def main(args):
                     # uniform (-1,1)
                     # z = FloatTensor(np.random.uniform(-1, 1, (batch, args.G_z_dim))).to(device)
                     z = FloatTensor(np.random.normal(0, 1, (batch, args.G_z_dim))).to(device)
-                fake_f_vector, D_decision = D.detect_only(G(z), return_feature=True)
+                D_decision = D(G(z))
 
-                if args.do_vis:
-                    G_features.append(fake_f_vector.detach())
+                # if args.do_vis:
+                #     G_features.append(fake_f_vector.detach())
 
-                gd_loss = adversarial_loss(D_decision, valid_label)
-                # feature matching loss
-                fm_loss = torch.abs(torch.mean(real_f_vector.detach(), 0) - torch.mean(fake_f_vector, 0)).mean()
-                # fm_loss = feature_matching_loss(torch.mean(fake_f_vector, 0), torch.mean(real_f_vector.detach(), 0))
-                g_loss = gd_loss + 0 * fm_loss
+                # gd_loss = adversarial_loss(D_decision, valid_label)
+                # # feature matching loss
+                # fm_loss = torch.abs(torch.mean(real_f_vector.detach(), 0) - torch.mean(fake_f_vector, 0)).mean()
+                # # fm_loss = feature_matching_loss(torch.mean(fake_f_vector, 0), torch.mean(real_f_vector.detach(), 0))
+                # g_loss = gd_loss + 0 * fm_loss
+                if args.relativisticG:
+                    g_loss = -triplet_loss(anchor_fake, D_decision, skewness=args.negative_skew) + triplet_loss(discriminator_output, D_decision)
+                else:
+                    g_loss = -triplet_loss(anchor_fake, D_decision, skewness=args.negative_skew) + triplet_loss(anchor_real, D_decision, skewness=args.positive_skew)
                 g_loss.backward()
                 optimizer_G.step()
+
+                decayG.step()
 
                 global_step += 1
 
                 D_fake_loss += fake_loss.detach()
                 D_real_loss += real_loss.detach()
                 G_d_loss += g_loss.detach()
-                G_train_loss += g_loss.detach() + fm_loss.detach()
-                FM_train_loss += fm_loss.detach()
+                G_train_loss += g_loss.detach()# + fm_loss.detach()
+                # FM_train_loss += fm_loss.detach()
 
-            # logger.info('[Epoch {}] Train: D_fake_loss: {}'.format(i, D_fake_loss / n_sample))
-            # logger.info('[Epoch {}] Train: D_real_loss: {}'.format(i, D_real_loss / n_sample))
-            # logger.info('[Epoch {}] Train: D_class_loss: {}'.format(i, D_class_loss / n_sample))
-            # logger.info('[Epoch {}] Train: G_train_loss: {}'.format(i, G_train_loss / n_sample))
-            # logger.info('[Epoch {}] Train: G_d_loss: {}'.format(i, G_d_loss / n_sample))
-            # logger.info('[Epoch {}] Train: FM_train_loss: {}'.format(i, FM_train_loss / n_sample))
-            # logger.info('---------------------------------------------------------------------------')
+                # logger.info('[Epoch {}] Train: D_fake_loss: {}'.format(i, D_fake_loss / n_sample))
+                # logger.info('[Epoch {}] Train: D_real_loss: {}'.format(i, D_real_loss / n_sample))
+                # logger.info('[Epoch {}] Train: D_class_loss: {}'.format(i, D_class_loss / n_sample))
+                # logger.info('[Epoch {}] Train: G_train_loss: {}'.format(i, G_train_loss / n_sample))
+                # logger.info('[Epoch {}] Train: G_d_loss: {}'.format(i, G_d_loss / n_sample))
+                # logger.info('[Epoch {}] Train: FM_train_loss: {}'.format(i, FM_train_loss / n_sample))
+                # logger.info('---------------------------------------------------------------------------')
 
             D_total_fake_loss.append(D_fake_loss / n_sample)
             D_total_real_loss.append(D_real_loss / n_sample)
             D_total_class_loss.append(D_class_loss / n_sample)
             G_total_train_loss.append(G_train_loss / n_sample)
             FM_total_train_loss.append(FM_train_loss / n_sample)
+# ---------------------------------------------------------------------------
 
             if dev_dataset:
                 # logger.info('#################### eval result at step {} ####################'.format(global_step))
@@ -854,9 +888,13 @@ if __name__ == '__main__':
     parser.add_argument('--D_Wf_dim', default=512, type=int,
                         help='The Dimension of Wf for Discriminator.')
 
+    parser.add_argument('--D_h_size', type=int, default=128, help='Number of hidden nodes in D.')
+
     # ------------------------Generator------------------------ #
     parser.add_argument('--G_z_dim', default=512, type=int,
                         help='The Dimension of z (noise) for Generator.')
+
+    parser.add_argument('--G_h_size', type=int, default=128, help='Number of hidden nodes in G.')
 
     parser.add_argument('--feature_dim', default=768, type=int,
                         help='The Dimension of feature vector for Generator output and Discriminator input.')
@@ -901,7 +939,7 @@ if __name__ == '__main__':
                         help='Whether to fine tune BERT during training.')
     parser.add_argument('--seed', type=int, default=123, help='seed')
     parser.add_argument('--model', type=str, required=True,
-                        choices={'gan', 'dgan', 'lstm_gan', 'cnn_gan'},
+                        choices={'gan', 'dgan', 'lstm_gan', 'cnn_gan', 'realness_gan'},
                         help='choose gan model')
     parser.add_argument('--length_weight', type=float, default=0,
                         help="Weight of short and long sample loss for Discriminator.")
@@ -919,6 +957,19 @@ if __name__ == '__main__':
                              "1: optimize both, and only optimize length by weight; "
                              "2: optimize both, and only optimize sample by weight;"
                              "3: optimize both, and optimize both by weight")
+
+    # RealnessGAN
+    parser.add_argument('--adam_eps', type=float, default=1e-08, help='Adam eps.')
+    parser.add_argument('--beta1', type=float, default=0.5, help='Adam betas[0].')
+    parser.add_argument('--beta2', type=float, default=0.999, help='Adam betas[1].')
+    parser.add_argument('--decay', type=float, default=0, help='Decay to apply to lr each cycle. decay^n_iter gives the final lr.')
+    parser.add_argument('--weight_decay', type=float, default=0, help='L2 regularization weight. Helps convergence but leads to artifacts in images, not recommended.')
+
+    parser.add_argument('--positive_skew', type=float, default=1.0, help='Skewness of anchor1 when computing loss.')
+    parser.add_argument('--negative_skew', type=float, default=-1.0, help='Skewness of anchor0 when computing loss.')
+    parser.add_argument('--num_outcomes', type=int, default=20, help='Number of outcomes of D.')
+    parser.add_argument('--relativisticG', action='store_true', default=False, help='Whether to use relativistic trick when training G.')
+    parser.add_argument('--use_adaptive_reparam', action='store_true', default=False, help='Whether to use re-parameterization trick in training.')
 
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
