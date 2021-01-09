@@ -305,7 +305,6 @@ def main(args):
 
                 real_loss_func = torch.nn.BCELoss(weight=weight).to(device)
 
-# ---------------------------------------------------------------------------
                 # the label used to train generator and discriminator.
                 valid_label = FloatTensor(batch, 1).fill_(1.0).detach()
                 fake_label = FloatTensor(batch, 1).fill_(0.0).detach()
@@ -319,20 +318,26 @@ def main(args):
 
                 # train D on real
                 optimizer_D.zero_grad()
-                discriminator_output= D(real_feature).log_softmax(1).exp()
+                realness_discriminator_output= realness_D(real_feature).log_softmax(1).exp()
+                realness_discriminator_output = realness_discriminator_output.squeeze()
 
-                discriminator_output = discriminator_output.squeeze()
-                # real_loss = adversarial_loss(discriminator_output, (y != 0.0).float())
-                # real_loss = real_loss_func(discriminator_output, (y != 0.0).float())
-                real_loss = triplet_loss(anchor_real, discriminator_output, skewness=args.positive_skew)
-                # if n_class > 2:  # 大于2表示除了训练判别器还要训练分类器
-                #     class_loss = classified_loss(classification_output, y.long())
-                #     real_loss += class_loss
-                #     D_class_loss += class_loss.detach()
+                realness_real_loss = triplet_loss(anchor_real, realness_discriminator_output, skewness=args.positive_skew)
+
+                real_f_vector, classification_discriminator_output, classification_output = classification_D(real_feature, return_feature=True)
+                classification_discriminator_output = classification_discriminator_output.squeeze()
+
+                # real_loss = adversarial_loss(classification_discriminator_output, (y != 0.0).float())
+                classification_real_loss = real_loss_func(classification_discriminator_output, (y != 0.0).float())
+
+                real_loss = realness_real_loss + classification_real_loss
+                if n_class > 2:  # 大于2表示除了训练判别器还要训练分类器
+                    class_loss = classified_loss(classification_output, y.long())
+                    real_loss += class_loss
+                    D_class_loss += class_loss.detach()
                 real_loss.backward()
 
-                # if args.do_vis:
-                #     all_features.append(real_f_vector.detach())
+                if args.do_vis:
+                    all_features.append(real_f_vector.detach())
 
                 # # train D on fake
                 if args.model == 'lstm_gan' or args.model == 'cnn_gan':
@@ -342,16 +347,21 @@ def main(args):
                     # z = FloatTensor(np.random.uniform(-1, 1, (batch, args.G_z_dim))).to(device)
                     z = FloatTensor(np.random.normal(0, 1, (batch, args.G_z_dim))).to(device)
                 fake_feature = G(z).detach()
-                fake_discriminator_output= D(fake_feature).log_softmax(1).exp()
+
+                realness_fake_discriminator_output= realness_D(fake_feature).log_softmax(1).exp()
+                classification_fake_discriminator_output = classification_D.detect_only(fake_feature)
+
+                realness_fake_loss = triplet_loss(anchor_fake, realness_fake_discriminator_output, skewness=args.negative_skew)
+
                 # beta of fake
-                # if 0 <= args.beta <= 1:
-                #     fake_loss = args.beta * adversarial_loss(fake_discriminator_output, fake_label)
-                # else:
-                #     fake_loss = adversarial_loss(fake_discriminator_output, fake_label)
-                fake_loss = triplet_loss(anchor_fake, fake_discriminator_output, skewness=args.negative_skew)
+                if 0 <= args.beta <= 1:
+                    classification_fake_loss = args.beta * adversarial_loss(classification_fake_discriminator_output, fake_label)
+                else:
+                    classification_fake_loss = adversarial_loss(classification_fake_discriminator_output, fake_label)
+
+                fake_loss = realness_fake_loss + classification_fake_loss
                 fake_loss.backward()
                 optimizer_D.step()
-
                 decayD.step()
 
                 if args.fine_tune:
@@ -362,8 +372,8 @@ def main(args):
 
                 sequence_output, pooled_output = E(token, mask, type_ids)
                 real_feature = pooled_output
-                discriminator_output = D(real_feature).log_softmax(1).exp()
-                discriminator_output = discriminator_output.squeeze()
+                realness_discriminator_output = realness_D(real_feature).log_softmax(1).exp()
+                realness_discriminator_output = realness_discriminator_output.squeeze()
 
                 if args.model == 'lstm_gan' or args.model == 'cnn_gan':
                     z = FloatTensor(np.random.normal(0, 1, (batch, 32, args.G_z_dim))).to(device)
@@ -371,23 +381,27 @@ def main(args):
                     # uniform (-1,1)
                     # z = FloatTensor(np.random.uniform(-1, 1, (batch, args.G_z_dim))).to(device)
                     z = FloatTensor(np.random.normal(0, 1, (batch, args.G_z_dim))).to(device)
-                D_decision = D(G(z)).log_softmax(1).exp()
+                realness_D_decision = realness_D(G(z)).log_softmax(1).exp()
 
-                # if args.do_vis:
-                #     G_features.append(fake_f_vector.detach())
+                fake_f_vector, classification_D_decision = classification_D.detect_only(G(z), return_feature=True)
 
-                # gd_loss = adversarial_loss(D_decision, valid_label)
-                # # feature matching loss
-                # fm_loss = torch.abs(torch.mean(real_f_vector.detach(), 0) - torch.mean(fake_f_vector, 0)).mean()
-                # # fm_loss = feature_matching_loss(torch.mean(fake_f_vector, 0), torch.mean(real_f_vector.detach(), 0))
-                # g_loss = gd_loss + 0 * fm_loss
+                if args.do_vis:
+                    G_features.append(fake_f_vector.detach())
+
+                classification_gd_loss = adversarial_loss(classification_D_decision, valid_label)
+                # feature matching loss
+                fm_loss = torch.abs(torch.mean(real_f_vector.detach(), 0) - torch.mean(fake_f_vector, 0)).mean()
+                # fm_loss = feature_matching_loss(torch.mean(fake_f_vector, 0), torch.mean(real_f_vector.detach(), 0))
+                classification_g_loss = classification_gd_loss + 0 * fm_loss
+
                 if args.relativisticG:
-                    g_loss = -triplet_loss(anchor_fake, D_decision, skewness=args.negative_skew) + triplet_loss(discriminator_output, D_decision)
+                    realness_g_loss = -triplet_loss(anchor_fake, realness_D_decision, skewness=args.negative_skew) + triplet_loss(realness_discriminator_output, realness_D_decision)
                 else:
-                    g_loss = -triplet_loss(anchor_fake, D_decision, skewness=args.negative_skew) + triplet_loss(anchor_real, D_decision, skewness=args.positive_skew)
+                    realness_g_loss = -triplet_loss(anchor_fake, realness_D_decision, skewness=args.negative_skew) + triplet_loss(anchor_real, realness_D_decision, skewness=args.positive_skew)
+
+                g_loss = realness_g_loss + classification_gd_loss
                 g_loss.backward()
                 optimizer_G.step()
-
                 decayG.step()
 
                 global_step += 1
@@ -411,7 +425,6 @@ def main(args):
             # D_total_class_loss.append(D_class_loss / n_sample)
             G_total_train_loss.append(G_train_loss / n_sample)
             # FM_total_train_loss.append(FM_train_loss / n_sample)
-# ---------------------------------------------------------------------------
 
             if dev_dataset:
                 # logger.info('#################### eval result at step {} ####################'.format(global_step))
@@ -443,7 +456,7 @@ def main(args):
                 elif signal == 0:
                     pass
                 elif signal == 1:
-                    save_gan_model(D, G, config['gan_save_path'])
+                    save_gan_model(realness_D, classification_D, G, config['gan_save_path'])
                     if args.fine_tune:
                         save_model(E, path=config['bert_save_path'], model_name='bert')
 
@@ -457,7 +470,7 @@ def main(args):
                 #     'valid_fpr95: {}'.format(ErrorRateAt95Recall(eval_result['all_binary_y'], eval_result['y_score'])))
 
         if args.patience >= args.n_epoch:
-            save_gan_model(D, G, config['gan_save_path'])
+            save_gan_model(realness_D, classification_D, G, config['gan_save_path'])
             if args.fine_tune:
                 save_model(E, path=config['bert_save_path'], model_name='bert')
 
@@ -500,7 +513,8 @@ def main(args):
         anchor1 = count / sum(count)
 
         G.eval()
-        D.eval()
+        realness_D.eval()
+        classification_D.eval()
         E.eval()
 
         all_detection_preds = []
@@ -528,32 +542,42 @@ def main(args):
 
                 # 大于2表示除了训练判别器还要训练分类器
                 if n_class > 2:
-                    f_vector, discriminator_output, classification_output = D(real_feature)
-                    all_detection_preds.append(discriminator_output)
+                    f_vector, classification_discriminator_output, classification_output = classification_D(real_feature)
+                    all_detection_preds.append(classification_discriminator_output)
                     all_class_preds.append(classification_output)
 
                 # 只预测判别器
                 else:
-                    discriminator_output = D(real_feature).log_softmax(1).exp()
-                    divergence_to_preidction = []
-                    for output in discriminator_output:
-                        d_real = triplet_loss(anchor_real, output)
-                        d_fake = triplet_loss(anchor_fake, output)
-                        divergence_to_preidction.append(1 if d_real > d_fake else 0)
-                    all_detection_preds.extend(divergence_to_preidction)
+                    realness_discriminator_output = realness_D(real_feature).log_softmax(1).exp()
+                    f_vector, classification_discriminator_output = classification_D.detect_only(real_feature, return_feature=True)
 
-        all_detection_preds = LongTensor(all_detection_preds).cpu()
+                if args.do_vis:
+                    all_features.append(f_vector)
+
+        #             divergence_to_preidction = []
+        #             for output in realness_discriminator_output:
+        #                 d_real = triplet_loss(anchor_real, output)
+        #                 d_fake = triplet_loss(anchor_fake, output)
+        #                 divergence_to_preidction.append(1 if d_real > d_fake else 0)
+        #             all_detection_preds.extend(divergence_to_preidction)
+        #
+        # # 用 realness_D 做分类的判别结果
+        # all_detection_preds = LongTensor(all_detection_preds).cpu()
+        # all_detection_binary_preds = all_detection_preds  # [length, 1]
+
+        # 用 classification_D 做分类的判别结果
+        all_detection_preds.append(classification_discriminator_output)
 
         all_y = LongTensor(dataset.dataset[:, -1].astype(int)).cpu()  # [length, n_class]
         all_binary_y = (all_y != 0).long()  # [length, 1] label 0 is oos
-        # all_detection_preds = torch.cat(all_detection_preds, 0).cpu()  # [length, 1]
-        # all_detection_binary_preds = convert_to_int_by_threshold(all_detection_preds.squeeze())  # [length, 1]
-        all_detection_binary_preds = all_detection_preds  # [length, 1]
+        all_detection_preds = torch.cat(all_detection_preds, 0).cpu()  # [length, 1]
+        all_detection_binary_preds = convert_to_int_by_threshold(all_detection_preds.squeeze())  # [length, 1]
 
         # print('all_detection_preds', all_detection_preds.size())
         # print('all_binary_y', all_binary_y.size())
         # 计算损失
-        detection_loss = detection_loss(all_detection_preds.float(), all_binary_y.float())
+        # detection_loss = detection_loss(all_detection_preds.float(), all_binary_y.float()) # 用 realness_D 做分类的判别结果
+        detection_loss = detection_loss(all_detection_preds.squeeze(), all_binary_y.float()) # 用 classification_D 做分类的判别结果
         result['detection_loss'] = detection_loss
 
         if n_class > 2:
@@ -598,7 +622,7 @@ def main(args):
 
     def test(dataset):
         # load BERT and GAN
-        load_gan_model(D, G, config['gan_save_path'])
+        load_gan_model(realness_D, classification_D, G, config['gan_save_path'])
         if args.fine_tune:
             load_model(E, path=config['bert_save_path'], model_name='bert')
 
@@ -611,7 +635,8 @@ def main(args):
         classified_loss = torch.nn.CrossEntropyLoss(ignore_index=0).to(device)
 
         G.eval()
-        D.eval()
+        realness_D.eval()
+        classification_D.eval()
         E.eval()
 
         all_detection_preds = []
@@ -635,14 +660,14 @@ def main(args):
 
                 # 大于2表示除了训练判别器还要训练分类器
                 if n_class > 2:
-                    f_vector, discriminator_output, classification_output = D(real_feature)
-                    all_detection_preds.append(discriminator_output)
+                    f_vector, classification_discriminator_output, classification_output = classification_D(real_feature, return_feature=True)
+                    all_detection_preds.append(classification_discriminator_output)
                     all_class_preds.append(classification_output)
 
                 # 只预测判别器
                 else:
-                    f_vector, discriminator_output = D(real_feature).log_softmax(1).exp()
-                    all_detection_preds.append(discriminator_output)
+                    f_vector, classification_discriminator_output = classification_D.detect_only(real_feature, return_feature=True)
+                    all_detection_preds.append(classification_discriminator_output)
                 if args.do_vis:
                     all_features.append(f_vector)
 
@@ -713,7 +738,7 @@ def main(args):
                 else:
                     z = FloatTensor(np.random.normal(0, 1, size=(end - start, args.G_z_dim)))
                 fake_feature = G(z)
-                f_vector, _ = D.detect_only(fake_feature, return_feature=True)
+                f_vector, _ = classification_D.detect_only(fake_feature, return_feature=True)
                 fake_features.append(f_vector)
                 start += batch
             return torch.cat(fake_features, 0).cpu().numpy()
