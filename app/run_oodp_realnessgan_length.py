@@ -109,10 +109,12 @@ def main(args):
     logger.info('config:')
     logger.info(config)
 
-    model = import_module('model.' + args.model)
+    realness_model = import_module('model.' + args.model)
+    vanilla_model = import_module('model.gan')
 
-    D = model.Discriminator(config)
-    G = model.Generator(config)
+    realness_D = realness_model.Discriminator(config)
+    classification_D = vanilla_model.Discriminator(config)
+    G = realness_model.Generator(config)
     E = BertModel.from_pretrained(bert_config['PreTrainModelDir'])  # Bert encoder
 
     if args.fine_tune:
@@ -122,7 +124,8 @@ def main(args):
         for param in E.parameters():
             param.requires_grad = False
 
-    D.to(device)
+    realness_D.to(device)
+    classification_D.to(device)
     G.to(device)
     E.to(device)
 
@@ -149,7 +152,8 @@ def main(args):
         optimizer_E = AdamW(E.parameters(), args.bert_lr)
 
         optimizer_G = torch.optim.Adam(G.parameters(), lr=args.G_lr, betas=(args.beta1, args.beta2),weight_decay=args.weight_decay, eps=args.adam_eps)
-        optimizer_D = torch.optim.Adam(D.parameters(), lr=args.D_lr, betas=(args.beta1, args.beta2),weight_decay=args.weight_decay)
+        D_parameters = list(realness_D.parameters()) + list(classification_D.parameters())
+        optimizer_D = torch.optim.Adam(D_parameters, lr=args.D_lr, betas=(args.beta1, args.beta2),weight_decay=args.weight_decay)
         decayG = torch.optim.lr_scheduler.ExponentialLR(optimizer_G, gamma=1 - args.decay)
         decayD = torch.optim.lr_scheduler.ExponentialLR(optimizer_D, gamma=1 - args.decay)
 
@@ -170,7 +174,8 @@ def main(args):
 
             # Initialize model state
             G.train()
-            D.train()
+            realness_D.train()
+            classification_D.train()
             E.train()
 
             G_train_loss = 0
@@ -302,8 +307,8 @@ def main(args):
 
 # ---------------------------------------------------------------------------
                 # the label used to train generator and discriminator.
-                # valid_label = FloatTensor(batch, 1).fill_(1.0).detach()
-                # fake_label = FloatTensor(batch, 1).fill_(0.0).detach()
+                valid_label = FloatTensor(batch, 1).fill_(1.0).detach()
+                fake_label = FloatTensor(batch, 1).fill_(0.0).detach()
 
                 anchor_real = torch.zeros((batch, num_outcomes), dtype=torch.float).to(device) + torch.tensor(anchor1, dtype=torch.float).to(device)
                 anchor_fake = torch.zeros((batch, num_outcomes), dtype=torch.float).to(device) + torch.tensor(anchor0, dtype=torch.float).to(device)
@@ -315,6 +320,7 @@ def main(args):
                 # train D on real
                 optimizer_D.zero_grad()
                 discriminator_output= D(real_feature).log_softmax(1).exp()
+
                 discriminator_output = discriminator_output.squeeze()
                 # real_loss = adversarial_loss(discriminator_output, (y != 0.0).float())
                 # real_loss = real_loss_func(discriminator_output, (y != 0.0).float())
