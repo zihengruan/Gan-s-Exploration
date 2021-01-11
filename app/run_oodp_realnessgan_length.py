@@ -551,6 +551,9 @@ def main(args):
                     realness_discriminator_output = realness_D(real_feature).log_softmax(1).exp()
                     f_vector, classification_discriminator_output = classification_D.detect_only(real_feature, return_feature=True)
 
+                    # 用 classification_D 做分类的判别结果
+                    all_detection_preds.append(classification_discriminator_output)
+
                 if args.do_vis:
                     all_features.append(f_vector)
 
@@ -565,8 +568,6 @@ def main(args):
         # all_detection_preds = LongTensor(all_detection_preds).cpu()
         # all_detection_binary_preds = all_detection_preds  # [length, 1]
 
-        # 用 classification_D 做分类的判别结果
-        all_detection_preds.append(classification_discriminator_output)
 
         all_y = LongTensor(dataset.dataset[:, -1].astype(int)).cpu()  # [length, n_class]
         all_binary_y = (all_y != 0).long()  # [length, 1] label 0 is oos
