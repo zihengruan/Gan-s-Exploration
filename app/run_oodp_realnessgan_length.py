@@ -24,7 +24,7 @@ from processor.oos_processor_v3 import OOSProcessor
 from processor.smp_processor import SMPProcessor
 from processor.smp_processor_v2 import SMPProcessor_v2
 from processor.smp_processor_v3 import SMPProcessor_v3
-from utils import check_manual_seed, save_gan_model, load_gan_model, save_model, load_model, output_cases, EarlyStopping
+from utils import check_manual_seed, save_realness_gan_model, load_realness_gan_model, save_model, load_model, output_cases, EarlyStopping
 from utils import convert_to_int_by_threshold
 from utils.visualization import scatter_plot, my_plot_roc, plot_train_test
 from utils.tool import ErrorRateAt95Recall, save_result, save_feature, std_mean
@@ -456,7 +456,7 @@ def main(args):
                 elif signal == 0:
                     pass
                 elif signal == 1:
-                    save_gan_model(realness_D, classification_D, G, config['gan_save_path'])
+                    save_realness_gan_model(realness_D, classification_D, G, config['gan_save_path'])
                     if args.fine_tune:
                         save_model(E, path=config['bert_save_path'], model_name='bert')
 
@@ -470,7 +470,7 @@ def main(args):
                 #     'valid_fpr95: {}'.format(ErrorRateAt95Recall(eval_result['all_binary_y'], eval_result['y_score'])))
 
         if args.patience >= args.n_epoch:
-            save_gan_model(realness_D, classification_D, G, config['gan_save_path'])
+            save_realness_gan_model(realness_D, classification_D, G, config['gan_save_path'])
             if args.fine_tune:
                 save_model(E, path=config['bert_save_path'], model_name='bert')
 
@@ -623,7 +623,7 @@ def main(args):
 
     def test(dataset):
         # load BERT and GAN
-        load_gan_model(realness_D, classification_D, G, config['gan_save_path'])
+        load_realness_gan_model(realness_D, classification_D, G, config['gan_save_path'])
         if args.fine_tune:
             load_model(E, path=config['bert_save_path'], model_name='bert')
 

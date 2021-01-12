@@ -97,9 +97,25 @@ def output_cases(texts, ground_truth, predicts, path, processor, logit=None):
                                  'ground_truth_is_ind', 'predict_is_ind'],
                   index=False)
 
-
-def save_gan_model(realness_discriminator: torch.nn.Module, classification_discriminator: torch.nn.Module, generator: torch.nn.Module, path):
+def save_gan_model(discriminator: torch.nn.Module, generator: torch.nn.Module, path):
     """保存GAN模型"""
+    state_dict = {'discriminator': discriminator.state_dict(),
+                  'generator': generator.state_dict()
+                  }
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(state_dict, path)
+    return state_dict
+
+
+def load_gan_model(discriminator: torch.nn.Module, generator: torch.nn.Module, path: str):
+    """加载GAN模型"""
+    checkpoint = torch.load(path)
+    discriminator.load_state_dict(checkpoint['discriminator'])
+    generator.load_state_dict(checkpoint['generator'])
+    return discriminator, generator
+
+def save_realness_gan_model(realness_discriminator: torch.nn.Module, classification_discriminator: torch.nn.Module, generator: torch.nn.Module, path):
+    """保存realness GAN模型"""
     state_dict = {'realness_discriminator': realness_discriminator.state_dict(),
                   'classification_discriminator': classification_discriminator.state_dict(),
                   'generator': generator.state_dict()
@@ -109,8 +125,8 @@ def save_gan_model(realness_discriminator: torch.nn.Module, classification_discr
     return state_dict
 
 
-def load_gan_model(realness_discriminator: torch.nn.Module, classification_discriminator: torch.nn.Module, generator: torch.nn.Module, path: str):
-    """保存加载模型"""
+def load_realness_gan_model(realness_discriminator: torch.nn.Module, classification_discriminator: torch.nn.Module, generator: torch.nn.Module, path: str):
+    """加载realness GAN模型"""
     checkpoint = torch.load(path)
     realness_discriminator.load_state_dict(checkpoint['realness_discriminator'])
     classification_discriminator.load_state_dict(checkpoint['classification_discriminator'])
