@@ -316,92 +316,94 @@ def main(args):
                 sequence_output, pooled_output = E(token, mask, type_ids)
                 real_feature = pooled_output
 
-                # train D on real
-                optimizer_D.zero_grad()
-                realness_discriminator_output= realness_D(real_feature).log_softmax(1).exp()
-                realness_discriminator_output = realness_discriminator_output.squeeze()
+                for t in range(args.D_updates):
+                    # train D on real
+                    optimizer_D.zero_grad()
+                    realness_discriminator_output= realness_D(real_feature).log_softmax(1).exp()
+                    realness_discriminator_output = realness_discriminator_output.squeeze()
 
-                realness_real_loss = triplet_loss(anchor_real, realness_discriminator_output, skewness=args.positive_skew)
+                    realness_real_loss = triplet_loss(anchor_real, realness_discriminator_output, skewness=args.positive_skew)
 
-                real_f_vector, classification_discriminator_output, classification_output = classification_D(real_feature, return_feature=True)
-                classification_discriminator_output = classification_discriminator_output.squeeze()
+                    real_f_vector, classification_discriminator_output, classification_output = classification_D(real_feature, return_feature=True)
+                    classification_discriminator_output = classification_discriminator_output.squeeze()
 
-                # real_loss = adversarial_loss(classification_discriminator_output, (y != 0.0).float())
-                classification_real_loss = real_loss_func(classification_discriminator_output, (y != 0.0).float())
+                    # real_loss = adversarial_loss(classification_discriminator_output, (y != 0.0).float())
+                    classification_real_loss = real_loss_func(classification_discriminator_output, (y != 0.0).float())
 
-                real_loss = realness_real_loss + classification_real_loss
-                if n_class > 2:  # 大于2表示除了训练判别器还要训练分类器
-                    class_loss = classified_loss(classification_output, y.long())
-                    real_loss += class_loss
-                    D_class_loss += class_loss.detach()
-                real_loss.backward()
+                    real_loss = realness_real_loss + classification_real_loss
+                    if n_class > 2:  # 大于2表示除了训练判别器还要训练分类器
+                        class_loss = classified_loss(classification_output, y.long())
+                        real_loss += class_loss
+                        D_class_loss += class_loss.detach()
+                    real_loss.backward()
 
-                if args.do_vis:
-                    all_features.append(real_f_vector.detach())
+                    if args.do_vis:
+                        all_features.append(real_f_vector.detach())
 
-                # # train D on fake
-                if args.model == 'lstm_gan' or args.model == 'cnn_gan':
-                    z = FloatTensor(np.random.normal(0, 1, (batch, 32, args.G_z_dim))).to(device)
-                else:
-                    # uniform (-1,1)
-                    # z = FloatTensor(np.random.uniform(-1, 1, (batch, args.G_z_dim))).to(device)
-                    z = FloatTensor(np.random.normal(0, 1, (batch, args.G_z_dim))).to(device)
-                fake_feature = G(z).detach()
+                    # # train D on fake
+                    if args.model == 'lstm_gan' or args.model == 'cnn_gan':
+                        z = FloatTensor(np.random.normal(0, 1, (batch, 32, args.G_z_dim))).to(device)
+                    else:
+                        # uniform (-1,1)
+                        # z = FloatTensor(np.random.uniform(-1, 1, (batch, args.G_z_dim))).to(device)
+                        z = FloatTensor(np.random.normal(0, 1, (batch, args.G_z_dim))).to(device)
+                    fake_feature = G(z).detach()
 
-                realness_fake_discriminator_output= realness_D(fake_feature).log_softmax(1).exp()
-                classification_fake_discriminator_output = classification_D.detect_only(fake_feature)
+                    realness_fake_discriminator_output= realness_D(fake_feature).log_softmax(1).exp()
+                    classification_fake_discriminator_output = classification_D.detect_only(fake_feature)
 
-                realness_fake_loss = triplet_loss(anchor_fake, realness_fake_discriminator_output, skewness=args.negative_skew)
+                    realness_fake_loss = triplet_loss(anchor_fake, realness_fake_discriminator_output, skewness=args.negative_skew)
 
-                # beta of fake
-                if 0 <= args.beta <= 1:
-                    classification_fake_loss = args.beta * adversarial_loss(classification_fake_discriminator_output, fake_label)
-                else:
-                    classification_fake_loss = adversarial_loss(classification_fake_discriminator_output, fake_label)
+                    # beta of fake
+                    if 0 <= args.beta <= 1:
+                        classification_fake_loss = args.beta * adversarial_loss(classification_fake_discriminator_output, fake_label)
+                    else:
+                        classification_fake_loss = adversarial_loss(classification_fake_discriminator_output, fake_label)
 
-                fake_loss = realness_fake_loss + classification_fake_loss
-                fake_loss.backward()
-                optimizer_D.step()
+                    fake_loss = realness_fake_loss + classification_fake_loss
+                    fake_loss.backward()
+                    optimizer_D.step()
                 decayD.step()
 
                 if args.fine_tune:
                     optimizer_E.step()
 
-                # train G
-                optimizer_G.zero_grad()
+                for t in range(args.G_updates):
+                    # train G
+                    optimizer_G.zero_grad()
 
-                sequence_output, pooled_output = E(token, mask, type_ids)
-                real_feature = pooled_output
-                realness_discriminator_output = realness_D(real_feature).log_softmax(1).exp()
-                realness_discriminator_output = realness_discriminator_output.squeeze()
+                    sequence_output, pooled_output = E(token, mask, type_ids)
+                    real_feature = pooled_output
+                    realness_discriminator_output = realness_D(real_feature).log_softmax(1).exp()
+                    realness_discriminator_output = realness_discriminator_output.squeeze()
 
-                if args.model == 'lstm_gan' or args.model == 'cnn_gan':
-                    z = FloatTensor(np.random.normal(0, 1, (batch, 32, args.G_z_dim))).to(device)
-                else:
-                    # uniform (-1,1)
-                    # z = FloatTensor(np.random.uniform(-1, 1, (batch, args.G_z_dim))).to(device)
-                    z = FloatTensor(np.random.normal(0, 1, (batch, args.G_z_dim))).to(device)
-                realness_D_decision = realness_D(G(z)).log_softmax(1).exp()
+                    if args.model == 'lstm_gan' or args.model == 'cnn_gan':
+                        z = FloatTensor(np.random.normal(0, 1, (batch, 32, args.G_z_dim))).to(device)
+                    else:
+                        # uniform (-1,1)
+                        # z = FloatTensor(np.random.uniform(-1, 1, (batch, args.G_z_dim))).to(device)
+                        z = FloatTensor(np.random.normal(0, 1, (batch, args.G_z_dim))).to(device)
+                    realness_D_decision = realness_D(G(z)).log_softmax(1).exp()
 
-                fake_f_vector, classification_D_decision = classification_D.detect_only(G(z), return_feature=True)
+                    fake_f_vector, classification_D_decision = classification_D.detect_only(G(z), return_feature=True)
 
-                if args.do_vis:
-                    G_features.append(fake_f_vector.detach())
+                    if args.do_vis:
+                        G_features.append(fake_f_vector.detach())
 
-                classification_gd_loss = adversarial_loss(classification_D_decision, valid_label)
-                # feature matching loss
-                fm_loss = torch.abs(torch.mean(real_f_vector.detach(), 0) - torch.mean(fake_f_vector, 0)).mean()
-                # fm_loss = feature_matching_loss(torch.mean(fake_f_vector, 0), torch.mean(real_f_vector.detach(), 0))
-                classification_g_loss = classification_gd_loss + 0 * fm_loss
+                    classification_gd_loss = adversarial_loss(classification_D_decision, valid_label)
+                    # feature matching loss
+                    fm_loss = torch.abs(torch.mean(real_f_vector.detach(), 0) - torch.mean(fake_f_vector, 0)).mean()
+                    # fm_loss = feature_matching_loss(torch.mean(fake_f_vector, 0), torch.mean(real_f_vector.detach(), 0))
+                    classification_g_loss = classification_gd_loss + 0 * fm_loss
 
-                if args.relativisticG:
-                    realness_g_loss = -triplet_loss(anchor_fake, realness_D_decision, skewness=args.negative_skew) + triplet_loss(realness_discriminator_output, realness_D_decision)
-                else:
-                    realness_g_loss = -triplet_loss(anchor_fake, realness_D_decision, skewness=args.negative_skew) + triplet_loss(anchor_real, realness_D_decision, skewness=args.positive_skew)
+                    if args.relativisticG:
+                        realness_g_loss = -triplet_loss(anchor_fake, realness_D_decision, skewness=args.negative_skew) + triplet_loss(realness_discriminator_output, realness_D_decision)
+                    else:
+                        realness_g_loss = -triplet_loss(anchor_fake, realness_D_decision, skewness=args.negative_skew) + triplet_loss(anchor_real, realness_D_decision, skewness=args.positive_skew)
 
-                g_loss = realness_g_loss + classification_gd_loss
-                g_loss.backward()
-                optimizer_G.step()
+                    g_loss = realness_g_loss + classification_gd_loss
+                    g_loss.backward()
+                    optimizer_G.step()
                 decayG.step()
 
                 global_step += 1
@@ -1019,6 +1021,9 @@ if __name__ == '__main__':
                              "3: optimize both, and optimize both by weight")
 
     # RealnessGAN
+    parser.add_argument('--D_updates', type=int, default=1, help='Number of D updating per iteration cycle.')
+    parser.add_argument('--G_updates', type=int, default=1, help='Number of G updating per iteration cycle.')
+
     parser.add_argument('--adam_eps', type=float, default=1e-08, help='Adam eps.')
     parser.add_argument('--beta1', type=float, default=0.5, help='Adam betas[0].')
     parser.add_argument('--beta2', type=float, default=0.999, help='Adam betas[1].')

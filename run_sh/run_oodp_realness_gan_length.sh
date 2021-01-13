@@ -1,6 +1,6 @@
 #! /bin/bash
 
-seeds="16 123 256 512 1024 1536 2048 4096 8192"
+seeds="16 256 1024 2048 8192"
 # dataset_file="binary_true_smp_full_v2"
 # $1 dataset_file
 # $2 mode
@@ -13,6 +13,9 @@ for seed in ${seeds} ; do
   --seed=${seed}  \
   --D_lr=2e-5 \
   --G_lr=2e-5 \
+  --num_outcomes=5 \
+  --D_updates=1 \
+  --G_updates=3 \
   --beta1=0.5 \
   --beta2=0.999 \
   --G_h_size=32 \
@@ -20,7 +23,6 @@ for seed in ${seeds} ; do
   --bert_lr=2e-5 \
   --positive_skew=1.0 \
   --negative_skew=-1.0 \
-  --num_outcomes=5 \
   --relativisticG \
   --fine_tune \
   --n_epoch=500 \
