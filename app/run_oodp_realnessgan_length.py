@@ -760,7 +760,7 @@ def main(args):
                                                         pre_exclude=False)
 
             text_dev_set = processor.read_dataset(data_path, ['val'], args.mode, args.maxlen, args.minlen,
-                                                  pre_exclude=True)
+                                                  pre_exclude=False)
 
         elif config['dataset'] == 'oos-eval':
             text_train_set = processor.read_dataset(data_path, ['train', 'oos_train'])

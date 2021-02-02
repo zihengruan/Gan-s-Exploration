@@ -685,7 +685,7 @@ def main(args):
                                                         pre_exclude=False)
 
             text_dev_set = processor.read_dataset(data_path, ['val'], args.mode, args.maxlen, args.minlen,
-                                                  pre_exclude=True)
+                                                  pre_exclude=False)
 
         elif config['dataset'] == 'oos-eval':
             text_train_set = processor.read_dataset(data_path, ['train', 'oos_train'])
@@ -928,9 +928,9 @@ if __name__ == '__main__':
                         choices={'gan', 'dgan', 'lstm_gan', 'cnn_gan'},
                         help='choose gan model')
     parser.add_argument('--length_weight', type=float, default=0,
-                        help="Weight of short and long sample loss for Discriminator.")
+                        help="Weight of short and long sample loss for Discriminator. The saving rate of sentences intended to exclude")
     parser.add_argument('--sample_weight', type=float, default=0,
-                        help="Weight of excluded sample loss for Discriminator.")
+                        help="Weight of excluded sample loss for Discriminator. The saving rate of sentences intended to exclude")
 
     # data config
     parser.add_argument('--mode', type=int, default=-1, help="Controll the filtering way of knowledge sample")
