@@ -22,9 +22,17 @@ class CategoricalLoss(nn.Module):
         self.device = device
         self.supports = self.supports.to(device)
 
-    def forward(self, anchor, feature, skewness=0.0):
+    def forward(self, anchor, feature, skewness=0.0, direction=None):
         batch_size = feature.shape[0]
-        skew = torch.zeros((batch_size, self.atoms)).to(self.device).fill_(skewness)
+        if direction is not None:
+            skew = torch.zeros((batch_size, self.atoms)).to(self.device)
+            for i, s in enumerate(skew):
+                if direction[i] == 1:
+                    skew[i].fill_(-skewness)
+                else:
+                    skew[i].fill_(skewness)
+        else:
+            skew = torch.zeros((batch_size, self.atoms)).to(self.device).fill_(skewness)
 
         # experiment to adjust KL divergence between positive/negative anchors
         Tz = skew + self.supports.view(1, -1) * torch.ones((batch_size, 1)).to(torch.float).view(-1, 1).to(self.device)

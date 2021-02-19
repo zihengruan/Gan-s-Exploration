@@ -5,7 +5,6 @@ import pickle
 
 import numpy as np
 import pandas as pd
-import json
 import torch
 import tqdm
 from sklearn.manifold import TSNE
@@ -346,6 +345,7 @@ def main(args):
                     # # train D on fake
                     # uniform (-1,1)
                     # z = FloatTensor(np.random.uniform(-1, 1, (batch, args.G_z_dim))).to(device)
+                    # normal (0,1)
                     z = FloatTensor(np.random.normal(0, 1, (batch, args.G_z_dim))).to(device)
                     fake_feature = G(z).detach()
 
@@ -379,6 +379,7 @@ def main(args):
 
                     # uniform (-1,1)
                     # z = FloatTensor(np.random.uniform(-1, 1, (batch, args.G_z_dim))).to(device)
+                    # normal (0,1)
                     z = FloatTensor(np.random.normal(0, 1, (batch, args.G_z_dim))).to(device)
                     realness_D_decision = realness_D(G(z)).log_softmax(1).exp()
 
@@ -556,27 +557,13 @@ def main(args):
                 if args.do_vis:
                     all_features.append(f_vector)
 
-        #             divergence_to_preidction = []
-        #             for output in realness_discriminator_output:
-        #                 d_real = triplet_loss(anchor_real, output)
-        #                 d_fake = triplet_loss(anchor_fake, output)
-        #                 divergence_to_preidction.append(1 if d_real > d_fake else 0)
-        #             all_detection_preds.extend(divergence_to_preidction)
-        #
-        # # 用 realness_D 做分类的判别结果
-        # all_detection_preds = LongTensor(all_detection_preds).cpu()
-        # all_detection_binary_preds = all_detection_preds  # [length, 1]
-
 
         all_y = LongTensor(dataset.dataset[:, -1].astype(int)).cpu()  # [length, n_class]
         all_binary_y = (all_y != 0).long()  # [length, 1] label 0 is oos
         all_detection_preds = torch.cat(all_detection_preds, 0).cpu()  # [length, 1]
         all_detection_binary_preds = convert_to_int_by_threshold(all_detection_preds.squeeze())  # [length, 1]
 
-        # print('all_detection_preds', all_detection_preds.size())
-        # print('all_binary_y', all_binary_y.size())
         # 计算损失
-        # detection_loss = detection_loss(all_detection_preds.float(), all_binary_y.float()) # 用 realness_D 做分类的判别结果
         detection_loss = detection_loss(all_detection_preds.squeeze(), all_binary_y.float()) # 用 classification_D 做分类的判别结果
         result['detection_loss'] = detection_loss
 
@@ -586,8 +573,6 @@ def main(args):
             all_class_preds = torch.argmax(class_one_hot_preds, 1)  # label
             class_acc = metrics.ind_class_accuracy(all_class_preds, all_y, oos_index=0)  # accuracy for ind class
             logger.info(metrics.classification_report(all_y, all_class_preds, target_names=processor.id_to_label))
-
-        # logger.info(metrics.classification_report(all_binary_y, all_detection_binary_preds, target_names=['oos', 'in']))
 
         # report
         oos_ind_precision, oos_ind_recall, oos_ind_fscore, _ = metrics.binary_recall_fscore(all_detection_binary_preds,
@@ -686,8 +671,6 @@ def main(args):
             all_class_preds = torch.argmax(class_one_hot_preds, 1)  # label
             class_acc = metrics.ind_class_accuracy(all_class_preds, all_y, oos_index=0)  # accuracy for ind class
             logger.info(metrics.classification_report(all_y, all_class_preds, target_names=processor.id_to_label))
-
-        # logger.info(metrics.classification_report(all_binary_y, all_detection_binary_preds, target_names=['oos', 'in']))
 
         # report
         oos_ind_precision, oos_ind_recall, oos_ind_fscore, _ = metrics.binary_recall_fscore(all_detection_binary_preds,
@@ -869,17 +852,6 @@ def main(args):
         plot_confusion_matrix(test_result['all_binary_y'], test_result['all_detection_binary_preds'],
                               args.output_dir)
 
-        # beta_log_path = 'beta_log.txt'
-        # if os.path.exists(beta_log_path):
-        #     flag = True
-        # else:
-        #     flag = False
-        # with open(beta_log_path, 'a', encoding='utf-8') as f:
-        #     if flag == False:
-        #         f.write('seed\tbeta\tdataset\tdev_eer\ttest_eer\tdata_size\n')
-        #     line = '\t'.join([str(config['seed']), str(config['beta']), str(config['data_file']), str(best_dev), str(test_result['eer']), '100'])
-        #     f.write(line + '\n')
-
         if args.do_vis:
             # [2 * length, feature_fim]
             features = np.concatenate([test_result['all_features'], get_fake_feature(len(test_dataset) // 2)], axis=0)
@@ -934,9 +906,9 @@ if __name__ == '__main__':
                         help="""Which type of dataset to be used, 
                         i.e. binary_undersample.json, binary_wiki_aug.json. Detail in config/data.ini""")
     # binary_smp_full base
-    # binary_smp_full_v2 自己排除知识
+    # binary_smp_full_v2 人工筛选
     # binary_smp_full_v3 知识库排除
-    # binary_smp_full_v4 知识库+ziji
+    # binary_smp_full_v4 知识库 + 人工筛选
 
     # ------------------------bert------------------------ #
     parser.add_argument('--bert_type',

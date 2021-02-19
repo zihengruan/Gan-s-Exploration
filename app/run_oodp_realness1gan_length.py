@@ -1,15 +1,10 @@
 # coding: utf-8
-# @author: Ross
-# @file: run_gan.py
-# @time: 2020/01/14
-# @contact: devross@gmail.com
 import argparse
 import os
 import pickle
 
 import numpy as np
 import pandas as pd
-import json
 import torch
 import tqdm
 from sklearn.manifold import TSNE
@@ -32,6 +27,7 @@ from utils import check_manual_seed, save_gan_model, load_gan_model, save_model,
 from utils import convert_to_int_by_threshold
 from utils.visualization import scatter_plot, my_plot_roc, plot_train_test
 from utils.tool import ErrorRateAt95Recall, save_result, save_feature, std_mean
+from utils.loss import CategoricalLoss
 
 SEED = 123
 freeze_data = dict()
@@ -69,11 +65,14 @@ def main(args):
     if 0 <= args.beta <= 1:
         logger.info('beta: {}'.format(args.beta))
     logger.info('mode: {}'.format(args.mode))
-    logger.info('maxlen: {}'.format(args.maxlen))
-    logger.info('minlen: {}'.format(args.minlen))
-    logger.info('optim_mode: {}'.format(args.optim_mode))
-    logger.info('length_weight: {}'.format(args.length_weight))
-    logger.info('sample_weight: {}'.format(args.sample_weight))
+    logger.info('num_outcomes: {}'.format(args.num_outcomes))
+    logger.info('D_updates: {}'.format(args.D_updates))
+    logger.info('G_updates: {}'.format(args.G_updates))
+    # logger.info('maxlen: {}'.format(args.maxlen))
+    # logger.info('minlen: {}'.format(args.minlen))
+    # logger.info('optim_mode: {}'.format(args.optim_mode))
+    # logger.info('length_weight: {}'.format(args.length_weight))
+    # logger.info('sample_weight: {}'.format(args.sample_weight))
 
     logger.info('Loading config...')
     bert_config = Config('config/bert.ini')
@@ -86,25 +85,6 @@ def main(args):
     # Prepare data processor
     data_path = os.path.join(data_config['DataDir'], data_config[args.data_file])  # 把目录和文件名合成一个路径
     label_path = data_path.replace('.json', '.label')
-
-    # with open(data_path, 'r', encoding='utf-8') as fp:
-    #     source = json.load(fp)
-    #     for type in source:
-    #         n = 0
-    #         n_id = 0
-    #         n_ood = 0
-    #         text_len = {}
-    #         for line in source[type]:
-    #             if line['domain'] == 'chat':
-    #                 n_ood += 1
-    #             else:
-    #                 n_id += 1
-    #             n += 1
-    #             text_len[len(line['text'])] = text_len.get(len(line['text']), 0) + 1
-    #         print(type, n)
-    #         print('ood', n_ood)
-    #         print('id', n_id)
-    #         print(sorted(text_len.items(), key=lambda d: d[0], reverse=False))
 
     if args.dataset == 'oos-eval':
         processor = OOSProcessor(bert_config, maxlen=32)
@@ -136,9 +116,6 @@ def main(args):
     G = model.Generator(config)
     E = BertModel.from_pretrained(bert_config['PreTrainModelDir'])  # Bert encoder
 
-    # logger.info('Discriminator: {}'.format(D))
-    # logger.info('Generator: {}'.format(G))
-
     if args.fine_tune:
         for param in E.parameters():
             param.requires_grad = True
@@ -152,6 +129,19 @@ def main(args):
 
     global_step = 0
 
+    triplet_loss = CategoricalLoss(atoms=args.num_outcomes, v_max=args.positive_skew, v_min=args.negative_skew)
+    triplet_loss.to(device)
+
+    # define anchors
+    # e.g. uniform and normal
+    unif = np.random.uniform(-1, 1, 1000)
+    count, bins = np.histogram(unif, args.num_outcomes)
+    anchor0 = count / sum(count)  # for ood
+
+    normal = np.random.normal(0, 0.1, 1000)
+    count, bins = np.histogram(normal, args.num_outcomes)
+    anchor1 = count / sum(count)  # for ind
+
     def train(train_dataset, dev_dataset):
         train_dataloader = DataLoader(train_dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=2)
 
@@ -163,10 +153,17 @@ def main(args):
         adversarial_loss = torch.nn.BCELoss().to(device)
         classified_loss = torch.nn.CrossEntropyLoss().to(device)
 
+        num_outcomes = args.num_outcomes
+
         # Optimizers
-        optimizer_G = torch.optim.Adam(G.parameters(), lr=args.G_lr)  # optimizer for generator
-        optimizer_D = torch.optim.Adam(D.parameters(), lr=args.D_lr)  # optimizer for discriminator
+        # optimizer_G = torch.optim.Adam(G.parameters(), lr=args.G_lr)  # optimizer for generator
+        # optimizer_D = torch.optim.Adam(D.parameters(), lr=args.D_lr)  # optimizer for discriminator
         optimizer_E = AdamW(E.parameters(), args.bert_lr)
+
+        optimizer_G = torch.optim.Adam(G.parameters(), lr=args.G_lr, betas=(args.beta1, args.beta2),weight_decay=args.weight_decay, eps=args.adam_eps)
+        optimizer_D = torch.optim.Adam(D.parameters(), lr=args.D_lr, betas=(args.beta1, args.beta2),weight_decay=args.weight_decay)
+        decayG = torch.optim.lr_scheduler.ExponentialLR(optimizer_G, gamma=1 - args.decay)
+        decayD = torch.optim.lr_scheduler.ExponentialLR(optimizer_D, gamma=1 - args.decay)
 
         G_total_train_loss = []
         D_total_fake_loss = []
@@ -189,10 +186,10 @@ def main(args):
             E.train()
 
             G_train_loss = 0
-            G_d_loss = 0
+            # G_d_loss = 0
             D_fake_loss = 0
             D_real_loss = 0
-            FM_train_loss = 0
+            # FM_train_loss = 0
             D_class_loss = 0
 
             G_features = []
@@ -305,77 +302,102 @@ def main(args):
 
                 real_loss_func = torch.nn.BCELoss(weight=weight).to(device)
 
-                # the label used to train generator and discriminator.
-                valid_label = FloatTensor(batch, 1).fill_(1.0).detach()
-                fake_label = FloatTensor(batch, 1).fill_(0.0).detach()
+                anchor_ood = torch.zeros((batch, num_outcomes), dtype=torch.float).to(device) + torch.tensor(anchor0, dtype=torch.float).to(device)
+                anchor_ind = torch.zeros((batch, num_outcomes), dtype=torch.float).to(device) + torch.tensor(anchor1, dtype=torch.float).to(device)
 
                 optimizer_E.zero_grad()
                 sequence_output, pooled_output = E(token, mask, type_ids)
                 real_feature = pooled_output
 
-                # train D on real
-                optimizer_D.zero_grad()
-                real_f_vector, discriminator_output, classification_output = D(real_feature, return_feature=True)
-                discriminator_output = discriminator_output.squeeze()
-                # real_loss = adversarial_loss(discriminator_output, (y != 0.0).float())
-                real_loss = real_loss_func(discriminator_output, (y != 0.0).float())
-                if n_class > 2:  # 大于2表示除了训练判别器还要训练分类器
-                    class_loss = classified_loss(classification_output, y.long())
-                    real_loss += class_loss
-                    D_class_loss += class_loss.detach()
-                real_loss.backward()
+                for t in range(args.D_updates):
+                    # train D on real
+                    optimizer_D.zero_grad()
+                    real_f_vector, discriminator_output, classification_output = D(real_feature, return_feature=True)
+                    discriminator_output = discriminator_output.log_softmax(1).exp()
+                    discriminator_output = discriminator_output.squeeze()
 
-                if args.do_vis:
-                    all_features.append(real_f_vector.detach())
+                    # loss for ood and ind
+                    # set anchor according to y
+                    y_ood = (y != 0.0).float()
+                    anchors =  torch.zeros((batch, num_outcomes), dtype=torch.float).to(device)
+                    for i, anchor in enumerate(anchors):
+                        if y_ood[i] == 1:
+                            anchors[i] += torch.tensor(anchor1, dtype=torch.float).to(device)
+                        else:
+                            anchors[i] += torch.tensor(anchor0, dtype=torch.float).to(device)
 
-                # # train D on fake
-                if args.model == 'lstm_gan' or args.model == 'cnn_gan':
-                    z = FloatTensor(np.random.normal(0, 1, (batch, 32, args.G_z_dim))).to(device)
-                else:
+                    real_loss = triplet_loss(anchors, discriminator_output, skewness=args.positive_skew, direction=y_ood)
+
+                    if n_class > 2:  # 大于2表示除了训练判别器还要训练分类器
+                        class_loss = classified_loss(classification_output, y.long())
+                        real_loss += class_loss
+                        D_class_loss += class_loss.detach()
+                    real_loss.backward()
+
+                    if args.do_vis:
+                        all_features.append(real_f_vector.detach())
+
+                    # # train D on fake
                     # uniform (-1,1)
                     # z = FloatTensor(np.random.uniform(-1, 1, (batch, args.G_z_dim))).to(device)
+                    # normal (0,1)
                     z = FloatTensor(np.random.normal(0, 1, (batch, args.G_z_dim))).to(device)
-                fake_feature = G(z).detach()
-                fake_discriminator_output = D.detect_only(fake_feature)
-                # beta of fake
-                if 0 <= args.beta <= 1:
-                    fake_loss = args.beta * adversarial_loss(fake_discriminator_output, fake_label)
-                else:
-                    fake_loss = adversarial_loss(fake_discriminator_output, fake_label)
-                fake_loss.backward()
-                optimizer_D.step()
+                    fake_feature = G(z).detach()
+                    fake_discriminator_output = D.detect_only(fake_feature).log_softmax(1).exp()
+
+                    # beta of fake
+                    if 0 <= args.beta <= 1:
+                        fake_loss = args.beta * \
+                                    triplet_loss(anchor_ood, fake_discriminator_output, skewness=args.positive_skew)
+                    else:
+                        fake_loss = triplet_loss(anchor_ood, fake_discriminator_output, skewness=args.positive_skew)
+                    fake_loss.backward()
+                    optimizer_D.step()
+                decayD.step()
 
                 if args.fine_tune:
                     optimizer_E.step()
 
-                # train G
-                optimizer_G.zero_grad()
-                if args.model == 'lstm_gan' or args.model == 'cnn_gan':
-                    z = FloatTensor(np.random.normal(0, 1, (batch, 32, args.G_z_dim))).to(device)
-                else:
+                for t in range(args.G_updates):
+                    # train G
+                    optimizer_G.zero_grad()
+
+                    sequence_output, pooled_output = E(token, mask, type_ids)
+                    real_feature = pooled_output
+                    discriminator_output = D.detect_only(real_feature).log_softmax(1).exp()
+                    discriminator_output = discriminator_output.squeeze()
+
                     # uniform (-1,1)
                     # z = FloatTensor(np.random.uniform(-1, 1, (batch, args.G_z_dim))).to(device)
+                    # normal (0,1)
                     z = FloatTensor(np.random.normal(0, 1, (batch, args.G_z_dim))).to(device)
-                fake_f_vector, D_decision = D.detect_only(G(z), return_feature=True)
+                    fake_f_vector, D_decision = D.detect_only(G(z), return_feature=True)
+                    D_decision = D_decision.log_softmax(1).exp()
 
-                if args.do_vis:
-                    G_features.append(fake_f_vector.detach())
+                    if args.do_vis:
+                        G_features.append(fake_f_vector.detach())
 
-                gd_loss = adversarial_loss(D_decision, valid_label)
-                # feature matching loss
-                fm_loss = torch.abs(torch.mean(real_f_vector.detach(), 0) - torch.mean(fake_f_vector, 0)).mean()
-                # fm_loss = feature_matching_loss(torch.mean(fake_f_vector, 0), torch.mean(real_f_vector.detach(), 0))
-                g_loss = gd_loss + 0 * fm_loss
-                g_loss.backward()
-                optimizer_G.step()
+                    if args.relativisticG:
+                        gd_loss = -triplet_loss(anchor_ind, D_decision,skewness=args.negative_skew) + triplet_loss(discriminator_output, D_decision)
+                    else:
+                        gd_loss = -triplet_loss(anchor_ind, D_decision,skewness=args.negative_skew) + triplet_loss(anchor_ood, skewness=args.positive_skew)
+
+                    # feature matching loss
+                    fm_loss = torch.abs(torch.mean(real_f_vector.detach(), 0) - torch.mean(fake_f_vector, 0)).mean()
+                    # fm_loss = feature_matching_loss(torch.mean(fake_f_vector, 0), torch.mean(real_f_vector.detach(), 0))
+
+                    g_loss = gd_loss + 0 * fm_loss
+                    g_loss.backward()
+                    optimizer_G.step()
+                decayG.step()
 
                 global_step += 1
 
                 D_fake_loss += fake_loss.detach()
                 D_real_loss += real_loss.detach()
-                G_d_loss += g_loss.detach()
+                # G_d_loss += g_loss.detach()
                 G_train_loss += g_loss.detach() + fm_loss.detach()
-                FM_train_loss += fm_loss.detach()
+                # FM_train_loss += fm_loss.detach()
 
             # logger.info('[Epoch {}] Train: D_fake_loss: {}'.format(i, D_fake_loss / n_sample))
             # logger.info('[Epoch {}] Train: D_real_loss: {}'.format(i, D_real_loss / n_sample))
@@ -387,9 +409,9 @@ def main(args):
 
             D_total_fake_loss.append(D_fake_loss / n_sample)
             D_total_real_loss.append(D_real_loss / n_sample)
-            D_total_class_loss.append(D_class_loss / n_sample)
+            # D_total_class_loss.append(D_class_loss / n_sample)
             G_total_train_loss.append(G_train_loss / n_sample)
-            FM_total_train_loss.append(FM_train_loss / n_sample)
+            # FM_total_train_loss.append(FM_train_loss / n_sample)
 
             if dev_dataset:
                 # logger.info('#################### eval result at step {} ####################'.format(global_step))
@@ -400,8 +422,7 @@ def main(args):
 
                     features = np.concatenate([eval_result['all_features'], G_features], axis=0)
                     features = TSNE(n_components=2, verbose=1, n_jobs=-1).fit_transform(features)
-                    labels = np.concatenate([eval_result['all_binary_y'], np.array([-1] * len(G_features))], 0).reshape(
-                        -1, 1)
+                    labels = np.concatenate([eval_result['all_binary_y'], np.array([-1] * len(G_features))], 0).reshape(-1, 1)
 
                     data = np.concatenate([features, labels], 1)
                     fig = scatter_plot(data, processor)
@@ -481,6 +502,9 @@ def main(args):
                 token, mask, type_ids, y = sample
             batch = len(token)
 
+            anchor_ood = torch.zeros(args.num_outcomes, dtype=torch.float).to(device) + torch.tensor(anchor0, dtype=torch.float).to(device)
+            anchor_ind = torch.zeros(args.num_outcomes, dtype=torch.float).to(device) + torch.tensor(anchor1, dtype=torch.float).to(device)
+
             # -------------------------evaluate D------------------------- #
             # BERT encode sentence to feature vector
 
@@ -491,25 +515,44 @@ def main(args):
                 # 大于2表示除了训练判别器还要训练分类器
                 if n_class > 2:
                     f_vector, discriminator_output, classification_output = D(real_feature, return_feature=True)
-                    all_detection_preds.append(discriminator_output)
                     all_class_preds.append(classification_output)
 
                 # 只预测判别器
                 else:
                     f_vector, discriminator_output = D.detect_only(real_feature, return_feature=True)
-                    all_detection_preds.append(discriminator_output)
+
+                discriminator_output = discriminator_output.log_softmax(1).exp()
+
                 if args.do_vis:
                     all_features.append(f_vector)
 
+                divergence_to_preidction = []
+
+                # logger.info('anchor_ood: {}'.format(anchor_ood))
+                # logger.info('anchor_ind: {}'.format(anchor_ind))
+                # logger.info('discriminator_output: {}'.format(discriminator_output))
+
+                for output in discriminator_output:
+                    d_ood = triplet_loss(anchor_ood, output, skewness=args.positive_skew)
+                    d_ind = triplet_loss(anchor_ind, output, skewness=args.negative_skew)
+                    # logger.info('d_ood : d_ind = {} : {}'.format(d_ood, d_ind))
+                    divergence_to_preidction.append(1 if d_ind < d_ood else 0)
+                all_detection_preds.extend(divergence_to_preidction)
+
         all_y = LongTensor(dataset.dataset[:, -1].astype(int)).cpu()  # [length, n_class]
         all_binary_y = (all_y != 0).long()  # [length, 1] label 0 is oos
-        all_detection_preds = torch.cat(all_detection_preds, 0).cpu()  # [length, 1]
-        all_detection_binary_preds = convert_to_int_by_threshold(all_detection_preds.squeeze())  # [length, 1]
 
-        # print('all_detection_preds', all_detection_preds.size())
-        # print('all_binary_y', all_binary_y.size())
+        # 用 realness_D 做 ood 判别
+        # all_detection_preds = torch.cat(all_detection_preds, 0).cpu()  # [length, 1]
+        # all_detection_binary_preds = convert_to_int_by_threshold(all_detection_preds.squeeze())  # [length, 1]
+        all_detection_preds = FloatTensor(all_detection_preds).cpu()
+        all_detection_binary_preds = all_detection_preds.squeeze()  # [length, 1]
+
+        # logger.info('all_detection_preds: {}'.format(all_detection_preds))
+        # logger.info('all_binary_y: {}'.format(all_binary_y))
+
         # 计算损失
-        detection_loss = detection_loss(all_detection_preds.squeeze(), all_binary_y.float())
+        detection_loss = detection_loss(all_detection_preds, all_binary_y.float())
         result['detection_loss'] = detection_loss
 
         if n_class > 2:
@@ -519,11 +562,8 @@ def main(args):
             class_acc = metrics.ind_class_accuracy(all_class_preds, all_y, oos_index=0)  # accuracy for ind class
             logger.info(metrics.classification_report(all_y, all_class_preds, target_names=processor.id_to_label))
 
-        # logger.info(metrics.classification_report(all_binary_y, all_detection_binary_preds, target_names=['oos', 'in']))
-
         # report
-        oos_ind_precision, oos_ind_recall, oos_ind_fscore, _ = metrics.binary_recall_fscore(all_detection_binary_preds,
-                                                                                            all_binary_y)
+        oos_ind_precision, oos_ind_recall, oos_ind_fscore, _ = metrics.binary_recall_fscore(all_detection_binary_preds,all_binary_y)
         detection_acc = metrics.accuracy(all_detection_binary_preds, all_binary_y)
 
         y_score = all_detection_preds.squeeze().tolist()
@@ -582,6 +622,9 @@ def main(args):
                 token, mask, type_ids, y = sample
             batch = len(token)
 
+            anchor_ood = torch.zeros(args.num_outcomes, dtype=torch.float).to(device) + torch.tensor(anchor0, dtype=torch.float).to(device)
+            anchor_ind = torch.zeros(args.num_outcomes, dtype=torch.float).to(device) + torch.tensor(anchor1, dtype=torch.float).to(device)
+
             # -------------------------evaluate D------------------------- #
             # BERT encode sentence to feature vector
 
@@ -592,23 +635,42 @@ def main(args):
                 # 大于2表示除了训练判别器还要训练分类器
                 if n_class > 2:
                     f_vector, discriminator_output, classification_output = D(real_feature, return_feature=True)
-                    all_detection_preds.append(discriminator_output)
                     all_class_preds.append(classification_output)
 
                 # 只预测判别器
                 else:
                     f_vector, discriminator_output = D.detect_only(real_feature, return_feature=True)
-                    all_detection_preds.append(discriminator_output)
+
+                discriminator_output = discriminator_output.log_softmax(1).exp()
+
                 if args.do_vis:
                     all_features.append(f_vector)
 
+                divergence_to_preidction = []
+
+                # logger.info('discriminator_output: {}'.format(discriminator_output))
+
+                for output in discriminator_output:
+                    d_ood = triplet_loss(anchor_ood, output, skewness=args.positive_skew)
+                    d_ind = triplet_loss(anchor_ind, output, skewness=args.negative_skew)
+                    # logger.info('d_ood : d_ind = {} : {}'.format(d_ood, d_ind))
+                    divergence_to_preidction.append(1 if d_ind < d_ood else 0)
+                all_detection_preds.extend(divergence_to_preidction)
+
         all_y = LongTensor(dataset.dataset[:, -1].astype(int)).cpu()  # [length, n_class]
         all_binary_y = (all_y != 0).long()  # [length, 1] label 0 is oos
-        all_detection_preds = torch.cat(all_detection_preds, 0).cpu()  # [length, 1]
-        all_detection_binary_preds = convert_to_int_by_threshold(all_detection_preds.squeeze())  # [length, 1]
+
+        # 用 realness_D 做 ood 判别
+        # all_detection_preds = torch.cat(all_detection_preds, 0).cpu()  # [length, 1]
+        # all_detection_binary_preds = convert_to_int_by_threshold(all_detection_preds.squeeze())  # [length, 1]
+        all_detection_preds = FloatTensor(all_detection_preds).cpu()
+        all_detection_binary_preds = all_detection_preds.squeeze()  # [length, 1]
+
+        # logger.info('all_detection_preds: {}'.format(all_detection_preds))
+        # logger.info('all_binary_y: {}'.format(all_binary_y))
 
         # 计算损失
-        detection_loss = detection_loss(all_detection_preds, all_binary_y.float())
+        detection_loss = detection_loss(all_detection_binary_preds, all_binary_y.float())
         result['detection_loss'] = detection_loss
 
         if n_class > 2:
@@ -617,8 +679,6 @@ def main(args):
             all_class_preds = torch.argmax(class_one_hot_preds, 1)  # label
             class_acc = metrics.ind_class_accuracy(all_class_preds, all_y, oos_index=0)  # accuracy for ind class
             logger.info(metrics.classification_report(all_y, all_class_preds, target_names=processor.id_to_label))
-
-        # logger.info(metrics.classification_report(all_binary_y, all_detection_binary_preds, target_names=['oos', 'in']))
 
         # report
         oos_ind_precision, oos_ind_recall, oos_ind_fscore, _ = metrics.binary_recall_fscore(all_detection_binary_preds,
@@ -800,17 +860,6 @@ def main(args):
         plot_confusion_matrix(test_result['all_binary_y'], test_result['all_detection_binary_preds'],
                               args.output_dir)
 
-        # beta_log_path = 'beta_log.txt'
-        # if os.path.exists(beta_log_path):
-        #     flag = True
-        # else:
-        #     flag = False
-        # with open(beta_log_path, 'a', encoding='utf-8') as f:
-        #     if flag == False:
-        #         f.write('seed\tbeta\tdataset\tdev_eer\ttest_eer\tdata_size\n')
-        #     line = '\t'.join([str(config['seed']), str(config['beta']), str(config['data_file']), str(best_dev), str(test_result['eer']), '100'])
-        #     f.write(line + '\n')
-
         if args.do_vis:
             # [2 * length, feature_fim]
             features = np.concatenate([test_result['all_features'], get_fake_feature(len(test_dataset) // 2)], axis=0)
@@ -865,9 +914,9 @@ if __name__ == '__main__':
                         help="""Which type of dataset to be used, 
                         i.e. binary_undersample.json, binary_wiki_aug.json. Detail in config/data.ini""")
     # binary_smp_full base
-    # binary_smp_full_v2 自己排除知识
+    # binary_smp_full_v2 人工筛选
     # binary_smp_full_v3 知识库排除
-    # binary_smp_full_v4 知识库+ziji
+    # binary_smp_full_v4 知识库 + 人工筛选
 
     # ------------------------bert------------------------ #
     parser.add_argument('--bert_type',
@@ -878,9 +927,13 @@ if __name__ == '__main__':
     parser.add_argument('--D_Wf_dim', default=512, type=int,
                         help='The Dimension of Wf for Discriminator.')
 
+    parser.add_argument('--D_h_size', type=int, default=128, help='Number of hidden nodes in D.')
+
     # ------------------------Generator------------------------ #
     parser.add_argument('--G_z_dim', default=512, type=int,
                         help='The Dimension of z (noise) for Generator.')
+
+    parser.add_argument('--G_h_size', type=int, default=128, help='Number of hidden nodes in G.')
 
     parser.add_argument('--feature_dim', default=768, type=int,
                         help='The Dimension of feature vector for Generator output and Discriminator input.')
@@ -925,12 +978,12 @@ if __name__ == '__main__':
                         help='Whether to fine tune BERT during training.')
     parser.add_argument('--seed', type=int, default=123, help='seed')
     parser.add_argument('--model', type=str, required=True,
-                        choices={'gan', 'dgan', 'lstm_gan', 'cnn_gan'},
+                        choices={'gan', 'dgan', 'lstm_gan', 'cnn_gan', 'realness1gan'},
                         help='choose gan model')
     parser.add_argument('--length_weight', type=float, default=0,
-                        help="Weight of short and long sample loss for Discriminator. The saving rate of sentences intended to exclude")
+                        help="Weight of short and long sample loss for Discriminator.")
     parser.add_argument('--sample_weight', type=float, default=0,
-                        help="Weight of excluded sample loss for Discriminator. The saving rate of sentences intended to exclude")
+                        help="Weight of excluded sample loss for Discriminator.")
 
     # data config
     parser.add_argument('--mode', type=int, default=-1, help="Controll the filtering way of knowledge sample")
@@ -943,6 +996,22 @@ if __name__ == '__main__':
                              "1: optimize both, and only optimize length by weight; "
                              "2: optimize both, and only optimize sample by weight;"
                              "3: optimize both, and optimize both by weight")
+
+    # RealnessGAN
+    parser.add_argument('--D_updates', type=int, default=1, help='Number of D updating per iteration cycle.')
+    parser.add_argument('--G_updates', type=int, default=1, help='Number of G updating per iteration cycle.')
+
+    parser.add_argument('--adam_eps', type=float, default=1e-08, help='Adam eps.')
+    parser.add_argument('--beta1', type=float, default=0.5, help='Adam betas[0].')
+    parser.add_argument('--beta2', type=float, default=0.999, help='Adam betas[1].')
+    parser.add_argument('--decay', type=float, default=0, help='Decay to apply to lr each cycle. decay^n_iter gives the final lr.')
+    parser.add_argument('--weight_decay', type=float, default=0, help='L2 regularization weight. Helps convergence but leads to artifacts in images, not recommended.')
+
+    parser.add_argument('--positive_skew', type=float, default=1.0, help='Skewness of anchor1 when computing loss.')
+    parser.add_argument('--negative_skew', type=float, default=-1.0, help='Skewness of anchor0 when computing loss.')
+    parser.add_argument('--num_outcomes', type=int, default=20, help='Number of outcomes of D.')
+    parser.add_argument('--relativisticG', action='store_true', default=False, help='Whether to use relativistic trick when training G.')
+    parser.add_argument('--use_adaptive_reparam', action='store_true', default=False, help='Whether to use re-parameterization trick in training.')
 
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)

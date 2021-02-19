@@ -9,8 +9,8 @@ seeds="16 256 1024 2048 8192"
 # $5 gross_result name
 # $6 save_path
 for seed in ${seeds} ; do
-  python -m app.run_oodp_realnessgan_length \
-  --model=realness_gan  \
+  python -m app.run_oodp_realness1gan_length \
+  --model=realness1gan  \
   --seed=${seed}  \
   --D_lr=2e-5 \
   --G_lr=2e-5 \
