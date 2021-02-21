@@ -536,7 +536,8 @@ def main(args):
                     d_ood = triplet_loss(anchor_ood, output, skewness=args.positive_skew)
                     d_ind = triplet_loss(anchor_ind, output, skewness=args.negative_skew)
                     # logger.info('d_ood : d_ind = {} : {}'.format(d_ood, d_ind))
-                    divergence_to_preidction.append(1 if d_ind < d_ood else 0)
+                    # divergence_to_preidction.append(1 if d_ind < d_ood else 0)
+                    divergence_to_preidction.append(d_ood / (d_ind + d_ood))
                 all_detection_preds.extend(divergence_to_preidction)
 
         all_y = LongTensor(dataset.dataset[:, -1].astype(int)).cpu()  # [length, n_class]
@@ -546,7 +547,8 @@ def main(args):
         # all_detection_preds = torch.cat(all_detection_preds, 0).cpu()  # [length, 1]
         # all_detection_binary_preds = convert_to_int_by_threshold(all_detection_preds.squeeze())  # [length, 1]
         all_detection_preds = FloatTensor(all_detection_preds).cpu()
-        all_detection_binary_preds = all_detection_preds.squeeze()  # [length, 1]
+        # all_detection_binary_preds = all_detection_preds.squeeze()  # [length, 1]
+        all_detection_binary_preds = convert_to_int_by_threshold(all_detection_preds.squeeze())  # [length, 1]
 
         # logger.info('all_detection_preds: {}'.format(all_detection_preds))
         # logger.info('all_binary_y: {}'.format(all_binary_y))
@@ -654,7 +656,8 @@ def main(args):
                     d_ood = triplet_loss(anchor_ood, output, skewness=args.positive_skew)
                     d_ind = triplet_loss(anchor_ind, output, skewness=args.negative_skew)
                     # logger.info('d_ood : d_ind = {} : {}'.format(d_ood, d_ind))
-                    divergence_to_preidction.append(1 if d_ind < d_ood else 0)
+                    # divergence_to_preidction.append(1 if d_ind < d_ood else 0)
+                    divergence_to_preidction.append(d_ood / (d_ind + d_ood))
                 all_detection_preds.extend(divergence_to_preidction)
 
         all_y = LongTensor(dataset.dataset[:, -1].astype(int)).cpu()  # [length, n_class]
@@ -664,13 +667,14 @@ def main(args):
         # all_detection_preds = torch.cat(all_detection_preds, 0).cpu()  # [length, 1]
         # all_detection_binary_preds = convert_to_int_by_threshold(all_detection_preds.squeeze())  # [length, 1]
         all_detection_preds = FloatTensor(all_detection_preds).cpu()
-        all_detection_binary_preds = all_detection_preds.squeeze()  # [length, 1]
+        # all_detection_binary_preds = all_detection_preds.squeeze()  # [length, 1]
+        all_detection_binary_preds = convert_to_int_by_threshold(all_detection_preds.squeeze())  # [length, 1]
 
         # logger.info('all_detection_preds: {}'.format(all_detection_preds))
         # logger.info('all_binary_y: {}'.format(all_binary_y))
 
         # 计算损失
-        detection_loss = detection_loss(all_detection_binary_preds, all_binary_y.float())
+        detection_loss = detection_loss(all_detection_preds, all_binary_y.float())
         result['detection_loss'] = detection_loss
 
         if n_class > 2:
@@ -681,8 +685,7 @@ def main(args):
             logger.info(metrics.classification_report(all_y, all_class_preds, target_names=processor.id_to_label))
 
         # report
-        oos_ind_precision, oos_ind_recall, oos_ind_fscore, _ = metrics.binary_recall_fscore(all_detection_binary_preds,
-                                                                                            all_binary_y)
+        oos_ind_precision, oos_ind_recall, oos_ind_fscore, _ = metrics.binary_recall_fscore(all_detection_binary_preds,all_binary_y)
         detection_acc = metrics.accuracy(all_detection_binary_preds, all_binary_y)
 
         y_score = all_detection_preds.squeeze().tolist()
