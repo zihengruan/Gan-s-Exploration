@@ -380,7 +380,7 @@ def main(args):
                     if args.relativisticG:
                         gd_loss = -triplet_loss(anchor_ind, D_decision,skewness=args.negative_skew) + triplet_loss(discriminator_output, D_decision)
                     else:
-                        gd_loss = -triplet_loss(anchor_ind, D_decision,skewness=args.negative_skew) + triplet_loss(anchor_ood, skewness=args.positive_skew)
+                        gd_loss = -triplet_loss(anchor_ind, D_decision,skewness=args.negative_skew) + triplet_loss(anchor_ood, D_decision, skewness=args.positive_skew)
 
                     # feature matching loss
                     fm_loss = torch.abs(torch.mean(real_f_vector.detach(), 0) - torch.mean(fake_f_vector, 0)).mean()
@@ -569,7 +569,7 @@ def main(args):
         detection_acc = metrics.accuracy(all_detection_binary_preds, all_binary_y)
 
         y_score = all_detection_preds.squeeze().tolist()
-        eer = metrics.cal_eer(all_binary_y, y_score)
+        eer = metrics.cal_eer(all_binary_y, all_detection_binary_preds)
 
         result['eer'] = eer
         result['all_detection_binary_preds'] = all_detection_binary_preds
