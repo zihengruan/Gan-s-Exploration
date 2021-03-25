@@ -8,6 +8,7 @@ seeds="16 256 1024 2048 8192"
 # $4 G_updates
 # $5 gross_result name
 # $6 save_path
+# $7 beta
 for seed in ${seeds} ; do
   python -m app.run_oodp_realness1gan_length \
   --model=realness1gan  \
@@ -32,7 +33,7 @@ for seed in ${seeds} ; do
   --bert_type=bert-base-chinese \
   --dataset=smp \
   --data_file=${1} \
-  --output_dir=oodp-gan/oodp-realness_gan-smp_mode${2}_outcome${3}_Gupdate${4}_s${seed} \
+  --output_dir=oodp-gan/oodp-realness_gan-smp_mode${2}_outcome${3}_Gupdate${4}_beta${7}_s${seed} \
   --do_train \
   --do_eval \
   --do_test \
@@ -40,10 +41,12 @@ for seed in ${seeds} ; do
   --feature_dim=768 \
   --G_z_dim=1024  \
   --mode=${2}  \
-  --result=${5}
-  rm -rf oodp-gan/oodp-realness_gan-smp_mode${2}_outcome${3}_Gupdate${4}_s${seed}/save
+  --result=${5}  \
+  --optim_mode=0 \
+  --beta=${7}
+  rm -rf oodp-gan/oodp-realness_gan-smp_mode${2}_outcome${3}_Gupdate${4}_beta${7}_s${seed}/save
 
-  cp realness_GQOGAN_mode${2}_outcome${3}_Gupdate${4}_gross_result.csv oodp-gan/oodp-realness_gan-smp_mode${2}_outcome${3}_Gupdate${4}_s${seed}
-  cp -r "/content/Gan-s-Exploration/oodp-gan/oodp-realness_gan-smp_mode${2}_outcome${3}_Gupdate${4}_s${seed}" "${6}"
+  cp realness_GQOGAN_mode${2}_outcome${3}_Gupdate${4}_beta${7}_gross_result.csv oodp-gan/oodp-realness_gan-smp_mode${2}_outcome${3}_Gupdate${4}_beta${7}_s${seed}
+  cp -r "/content/Gan-s-Exploration/oodp-gan/oodp-realness_gan-smp_mode${2}_outcome${3}_Gupdate${4}_beta${7}_s${seed}" "${6}"
 done
 exit 0

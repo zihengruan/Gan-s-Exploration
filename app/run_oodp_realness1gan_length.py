@@ -326,7 +326,8 @@ def main(args):
                         else:
                             anchors[i] += torch.tensor(anchor0, dtype=torch.float).to(device)
 
-                    real_loss = triplet_loss(anchors, discriminator_output, skewness=args.positive_skew, direction=y_ood)
+                    # weighted triplet loss
+                    real_loss = triplet_loss(anchors, discriminator_output, skewness=args.positive_skew, direction=y_ood, weight=weight)#
 
                     if n_class > 2:  # 大于2表示除了训练判别器还要训练分类器
                         class_loss = classified_loss(classification_output, y.long())
@@ -377,6 +378,7 @@ def main(args):
                     if args.do_vis:
                         G_features.append(fake_f_vector.detach())
 
+                    # todo discriminator_output 区分 ood 与 ind
                     if args.relativisticG:
                         gd_loss = -triplet_loss(anchor_ind, D_decision,skewness=args.negative_skew) + triplet_loss(discriminator_output, D_decision)
                     else:

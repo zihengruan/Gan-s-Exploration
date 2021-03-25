@@ -22,7 +22,7 @@ class CategoricalLoss(nn.Module):
         self.device = device
         self.supports = self.supports.to(device)
 
-    def forward(self, anchor, feature, skewness=0.0, direction=None):
+    def forward(self, anchor, feature, skewness=0.0, direction=None, weight=None):
         batch_size = feature.shape[0]
         if direction is not None:
             skew = torch.zeros((batch_size, self.atoms)).to(self.device)
@@ -47,6 +47,9 @@ class CategoricalLoss(nn.Module):
         skewed_anchor.view(-1).index_add_(0, (l + offset).view(-1), (anchor * (u.float() - b)).view(-1))
         skewed_anchor.view(-1).index_add_(0, (u + offset).view(-1), (anchor * (b - l.float())).view(-1))
 
-        loss = -(skewed_anchor * (feature + 1e-16).log()).sum(-1).mean()
+        if weight is not None:
+            loss = -((skewed_anchor * (feature + 1e-16).log()).sum(-1) * weight).mean()
+        else:
+            loss = -(skewed_anchor * (feature + 1e-16).log()).sum(-1).mean()
 
         return loss
