@@ -1,7 +1,7 @@
 #! /bin/bash
 
 seeds="16 256 1024 2048 8192"
-## dataset_file="binary_undersample"
+## dataset_file="binary_undersample, binary_wiki_aug"
 ## $1 dataset_file
 ## $2 num_outcomes
 ## $3 G_updates
@@ -31,7 +31,7 @@ for seed in ${seeds} ; do
   --bert_type=bert-large-uncased \
   --dataset=oos-eval \
   --data_file=${1} \
-  --output_dir=oodp-gan/oos-oodp-gan_outcome${2}_Gupdate${3}_s${seed} \
+  --output_dir=oodp-gan/oos-${1}-oodp-gan_outcome${2}_Gupdate${3}_s${seed} \
   --do_train \
   --do_eval \
   --do_test \
@@ -39,9 +39,9 @@ for seed in ${seeds} ; do
   --feature_dim=1024 \
   --G_z_dim=1024  \
   --result=${4}
-  rm -rf oodp-gan/oos-oodp-gan_outcome${2}_Gupdate${3}_s${seed}/save
+  rm -rf oodp-gan/oos-${1}-oodp-gan_outcome${2}_Gupdate${3}_s${seed}/save
 
-  cp oos-realness_GQOGAN_outcome${2}_Gupdate${3}_gross_result.csv oodp-gan/oos-oodp-gan_outcome${2}_Gupdate${3}_s${seed}
-  cp -r "/content/Gan-s-Exploration/oodp-gan/oos-oodp-gan_outcome${2}_Gupdate${3}_s${seed}" "${5}"
+  cp oos-${1}-realness_GQOGAN_outcome${2}_Gupdate${3}_gross_result.csv oodp-gan/oos-${1}-oodp-gan_outcome${2}_Gupdate${3}_s${seed}
+  cp -r "/content/Gan-s-Exploration/oodp-gan/oos-${1}-oodp-gan_outcome${2}_Gupdate${3}_s${seed} " "${5}"
 done
 exit 0
