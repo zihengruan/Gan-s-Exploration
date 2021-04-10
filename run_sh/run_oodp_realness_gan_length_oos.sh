@@ -7,6 +7,7 @@ seeds="16 256 1024 2048 8192"
 ## $3 G_updates
 ## $4 gross_result name
 ## $5 save_path
+## $6 beta
 for seed in ${seeds} ; do
   python -m app.run_oodp_realness1gan_length \
   --model=realness1gan  \
@@ -31,17 +32,19 @@ for seed in ${seeds} ; do
   --bert_type=bert-large-uncased \
   --dataset=oos-eval \
   --data_file=${1} \
-  --output_dir=oodp-gan/oos-${1}-oodp-gan_outcome${2}_Gupdate${3}_s${seed} \
+  --output_dir=oodp-gan/oos-${1}-oodp-gan_outcome${2}_Gupdate${3}_beta${6}_s${seed} \
   --do_train \
   --do_eval \
   --do_test \
   --do_vis \
   --feature_dim=1024 \
   --G_z_dim=1024  \
-  --result=${4}
-  rm -rf oodp-gan/oos-${1}-oodp-gan_outcome${2}_Gupdate${3}_s${seed}/save
+  --result=${4}  \
+  --optim_mode=0 \
+  --beta=${6}
+  rm -rf oodp-gan/oos-${1}-oodp-gan_outcome${2}_Gupdate${3}_beta${6}_s${seed}/save
 
-  cp oos-${1}-realness_GQOGAN_outcome${2}_Gupdate${3}_gross_result.csv oodp-gan/oos-${1}-oodp-gan_outcome${2}_Gupdate${3}_s${seed}
-  cp -r "/content/Gan-s-Exploration/oodp-gan/oos-${1}-oodp-gan_outcome${2}_Gupdate${3}_s${seed} " "${5}"
+  cp ${4}_gross_result.csv oodp-gan/oos-${1}-oodp-gan_outcome${2}_Gupdate${3}_beta${6}_s${seed}
+  cp -r "/content/Gan-s-Exploration/oodp-gan/oos-${1}-oodp-gan_outcome${2}_Gupdate${3}_beta${6}_s${seed}" "${5}"
 done
 exit 0
