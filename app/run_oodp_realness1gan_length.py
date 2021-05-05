@@ -759,8 +759,11 @@ def main(args):
             text_train_set, text_train_len = processor.read_dataset(data_path, ['train'])
             text_dev_set, text_dev_len = processor.read_dataset(data_path, ['val'])
 
-        if args.ood:
-            text_train_set = [sample for sample in text_train_set if sample['domain'] != 'chat']
+        if config['ood']:
+            if config['dataset'] == 'smp':
+                text_train_set = [sample for sample in text_train_set if sample['domain'] != 'chat']
+            if config['dataset'] == 'oos-eval':
+                text_train_set = [sample for sample in text_train_set if sample[1] != 'oos']
 
         train_features = processor.convert_to_ids(text_train_set)
         dev_features = processor.convert_to_ids(text_dev_set)
