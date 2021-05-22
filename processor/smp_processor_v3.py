@@ -1,15 +1,14 @@
 # coding: utf-8
 # @author: Ross
-"""oos-eval數據集预处理"""
 
 from processor.base_processor import BertProcessor
 
-"""将数据集做简单的预处理，包括生成类标签文件"""
 import os
 import json
 from config import Config
 from configparser import SectionProxy
-
+import numpy as np
+from scipy import stats
 
 class SMPProcessor_v3(BertProcessor):
     """oos-eval 数据集处理"""
@@ -90,6 +89,80 @@ class SMPProcessor_v3(BertProcessor):
         :return: ids
         """
         return self.label_to_id[label]
+
+    def remove_minlen(self, dataset, minlen):
+        n_dataset = []
+        for i, line in enumerate(dataset):
+            if len(line['text']) >= minlen:
+                n_dataset.append(line)
+        return n_dataset
+
+    def remove_maxlen(self, dataset, maxlen):
+        n_dataset = []
+        for i, line in enumerate(dataset):
+            if len(line['text']) <= maxlen:
+                n_dataset.append(line)
+        return n_dataset
+
+    def get_smp_data_info(self, data_path):
+        """
+
+        Args:
+            data_path: url
+
+        Returns: {'train':{'num':..., 'ood':..., 'id':..., 'tex_len': [(), ()], 'all_len': [],
+                  'val':....,
+                  'test':...}
+
+        """
+        result = {}
+        with open(data_path, 'r', encoding='utf-8') as fp:
+            source = json.load(fp)
+            for type in source:
+                n = 0
+                n_id = 0
+                n_ood = 0
+                text_len = {}
+                all_text_len = []
+                for line in source[type]:
+                    if line['domain'] == 'chat':
+                        n_ood += 1
+                    else:
+                        n_id += 1
+                    n += 1
+                    text_len[len(line['text'])] = text_len.get(len(line['text']), 0) + 1
+                    all_text_len.append(len(line['text']))
+                result[type] = {'num': n, 'ood': n_ood, 'id': n_id,
+                                'text_len': sorted(text_len.items(), key=lambda d: d[0], reverse=False),
+                                'all_len': all_text_len}
+        return result
+
+    def get_conf_intveral(self, data: list, alpha, logarithm=False):
+        """
+        置信区间
+        Args:
+            data:
+
+        Returns: (a, b)
+        a: 置信上界; b: 置信下界
+
+        alpha : array_like of float
+            Probability that an rv will be drawn from the returned range.
+            Each value should be in the range [0, 1].
+        """
+        data = np.array(data)
+        if logarithm:   # 对数正态分布
+            data = np.log(data)
+        mean = np.mean(data)
+        std = np.std(data, ddof=1)
+        # from scipy import stats
+        skew = stats.skew(data)  # 求偏度
+        kurtosis = stats.kurtosis(data)  # 求峰度
+        conf_intveral = stats.norm.interval(alpha, loc=mean, scale=std) # 置信区间
+        if logarithm:
+            conf_intveral = np.exp(conf_intveral)
+        return conf_intveral
+
 
 
 # --------------------oos-eval-------------------- #

@@ -23,6 +23,7 @@ from processor.oos_processor_v3 import OOSProcessor
 from processor.smp_processor import SMPProcessor
 from processor.smp_processor_v2 import SMPProcessor_v2
 from processor.smp_processor_v3 import SMPProcessor_v3
+from processor.entity_processor import EntityProcessor
 from utils import check_manual_seed, save_gan_model, load_gan_model, save_model, load_model, output_cases, EarlyStopping
 from utils import convert_to_int_by_threshold
 from utils.visualization import scatter_plot, my_plot_roc, plot_train_test
@@ -762,6 +763,30 @@ def main(args):
             if config['dataset'] == 'oos-eval':
                 text_train_set = [sample for sample in text_train_set if sample[1] != 'oos']
 
+        # 去除人工标记的需要知识才能进行检测的句子
+        if args.dataset == 'smp' and args.manual_knowledge:
+            text_train_set = [sample for sample in text_train_set if sample['knowledge'] == 0]
+
+        # ED (Entity Deletion, 裁剪领域实体词)：根据知识实体标记文件，挖去实体词汇
+        if args.dataset == "smp" and args.remove_entity:
+            if args.entity_mode == 1:
+                entity_processor = EntityProcessor('data/smp/entity/训练集 全知识标记.xlsx', args.entity_mode)
+            else:
+                entity_processor = EntityProcessor('data/smp/entity/entity.json', args.entity_mode)
+            text_train_set, num = entity_processor.remove_smp_entity(text_train_set)
+
+        # LS (Length Selection, 长度优选)：根据置信水平，得到置信区间（句子长度区间），优选样本
+        if args.dataset == 'smp':
+            text_data = processor.get_smp_data_info(data_path)
+        if args.dataset == 'oos-eval':
+            text_data = processor.get_oos_data_info(data_path)
+
+        conf_intveral = processor.get_conf_intveral(text_data['train']['all_len'], args.alpha, logarithm=args.logarithm)
+        logger.info('conf_intveral: ' + str(conf_intveral))
+        text_train_set = processor.remove_minlen(dataset=text_train_set, minlen=conf_intveral[0])
+        text_train_set = processor.remove_maxlen(dataset=text_train_set, maxlen=conf_intveral[1])
+
+
         train_features = processor.convert_to_ids(text_train_set)
         dev_features = processor.convert_to_ids(text_dev_set)
 
@@ -1017,6 +1042,21 @@ if __name__ == '__main__':
     parser.add_argument('--num_outcomes', type=int, default=20, help='Number of outcomes of D.')
     parser.add_argument('--relativisticG', action='store_true', default=False, help='Whether to use relativistic trick when training G.')
     parser.add_argument('--use_adaptive_reparam', action='store_true', default=False, help='Whether to use re-parameterization trick in training.')
+
+    # Entity Deletion and Length Selection
+    parser.add_argument('--remove_entity', action='store_true', default=False,
+                        help='Whether to remove entity in data.')
+
+    parser.add_argument('--entity_mode', default=1, type=int)
+
+    parser.add_argument('--alpha', default=1.0, type=float,
+                        help='Probability of norm distribution.')
+
+    parser.add_argument('--manual_knowledge', action='store_true', default=False,
+                        help='Whether to remove manual knowledge in data.')
+
+    parser.add_argument('--logarithm', action='store_false', default=True,
+                        help='Whether to logarithm.')
 
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
