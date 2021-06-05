@@ -10,7 +10,7 @@ seeds="16 256 1024 2048 8192"
 # $6 save_path
 # $7 alpha
 for seed in ${seeds} ; do
-  python -m app.run_oodp_realness1gan_length \
+  python -m app.run_oodp_realness1gan_ed_ls \
   --model=realness1gan  \
   --seed=${seed}  \
   --D_lr=2e-5 \
@@ -49,7 +49,7 @@ for seed in ${seeds} ; do
 
   rm -rf oodp-gan/oodp-realness_gan-smp_mode${2}_outcome${3}_Gupdate${4}_alpha${7}_s${seed}/save
 
-  cp realness_GQOGAN_mode${2}_outcome${3}_Gupdate${4}_alpha${6}_gross_result.csv oodp-gan/oodp-realness_gan-smp_mode${2}_outcome${3}_Gupdate${4}_alpha${7}_s${seed}
+  cp realness_GQOGAN_mode${2}_outcome${3}_Gupdate${4}_alpha${7}_gross_result.csv oodp-gan/oodp-realness_gan-smp_mode${2}_outcome${3}_Gupdate${4}_alpha${7}_s${seed}
   cp -r "/content/Gan-s-Exploration/oodp-gan/oodp-realness_gan-smp_mode${2}_outcome${3}_Gupdate${4}_alpha${7}_s${seed}" "${6}"
 done
 exit 0
